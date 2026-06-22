@@ -581,6 +581,14 @@ declare global {
     onArchiveDeletionPrompt: (
       cb: (archivePaths: string[]) => void
     ) => () => Electron.IpcRenderer;
+    onInstallerProgress: (
+      cb: (
+        shop: GameShop,
+        objectId: string,
+        progress: number,
+        status: "running" | "complete" | "failed"
+      ) => void
+    ) => () => Electron.IpcRenderer;
     deleteArchive: (filePath: string) => Promise<boolean>;
     getDefaultWinePrefixSelectionPath: () => Promise<string | null>;
     createSteamShortcut: (

@@ -31,6 +31,8 @@ const addGameToQueue = async (
     fileSize,
     fileIndices,
     selectedFilesSize,
+    autoInstallAfterExtraction,
+    installPath,
   } = payload;
 
   const parsedFileSize = parseBytes(fileSize ?? null);
@@ -56,6 +58,10 @@ const addGameToQueue = async (
     automaticallyDeleteArchiveFiles,
     fileIndices,
     selectedFilesSize,
+    autoInstallAfterExtraction: autoInstallAfterExtraction ?? false,
+    installPath: installPath ?? null,
+    installing: false,
+    installerProgress: 0,
   };
 
   try {

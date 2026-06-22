@@ -27,6 +27,7 @@ export function BottomPanel() {
   const { lastPacket, progress, downloadSpeed, eta } = useDownload();
 
   const extraction = useAppSelector((state) => state.download.extraction);
+  const installer = useAppSelector((state) => state.download.installer);
 
   const [version, setVersion] = useState("");
   const [sessionHash, setSessionHash] = useState<null | string>("");
@@ -80,6 +81,20 @@ export function BottomPanel() {
         return t("extracting", {
           title: extractingGame.title,
           percentage: `${extractionPercentage}%`,
+        });
+      }
+    }
+
+    if (installer && installer.status === "running") {
+      const installingGame = library.find(
+        (game) => game.id === installer.visibleId
+      );
+
+      if (installingGame) {
+        const installerPercentage = Math.round(installer.progress * 100);
+        return t("installing", {
+          title: installingGame.title,
+          percentage: `${installerPercentage}%`,
         });
       }
     }

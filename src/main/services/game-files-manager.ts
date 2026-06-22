@@ -14,6 +14,7 @@ import createDesktopShortcut from "create-desktop-shortcuts";
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import pngToIco from "png-to-ico";
 import sharp from "sharp";
 import { ExtractionProgress, SevenZip } from "./7zip";
@@ -26,6 +27,7 @@ import { deleteArchiveFile } from "@main/events/library/delete-archive";
 import { publishExtractionCompleteNotification } from "./notifications";
 import { SystemPath } from "./system-path";
 import { WindowManager } from "./window-manager";
+import { Umu } from "./umu";
 
 const PROGRESS_THROTTLE_MS = 1000;
 
@@ -254,8 +256,335 @@ export class GameFilesManager {
     this.lastProgressUpdateTime = 0;
     this.lastProgressUpdateValue = 0;
 
-    await this.searchAndBindExecutable();
+    if (download.autoInstallAfterExtraction && download.folderName) {
+      const extractedPath = path.join(
+        download.downloadPath,
+        download.folderName
+      );
+      await this.runAutoInstall(extractedPath, download.installPath ?? null);
+    } else {
+      await this.searchAndBindExecutable();
+    }
+
     await this.autoLinkClassicsDiscs();
+  }
+
+  private async findSetupExe(folderPath: string): Promise<string | null> {
+    // Prefer setup.exe at the root level first
+    const rootSetup = path.join(folderPath, "setup.exe");
+    if (fs.existsSync(rootSetup)) return rootSetup;
+
+    // Fall back to recursive search for setup.exe
+    try {
+      const entries = await fs.promises.readdir(folderPath, {
+        withFileTypes: true,
+        recursive: true,
+      });
+
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (entry.name.toLowerCase() === "setup.exe") {
+          const parentPath =
+            "parentPath" in entry
+              ? entry.parentPath
+              : (entry as unknown as { path?: string }).path || folderPath;
+          return path.join(parentPath, entry.name);
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+
+    return null;
+  }
+
+  private sendInstallerProgress(progress: number, status: "running" | "complete" | "failed") {
+    WindowManager.sendToAppWindows(
+      "on-installer-progress",
+      this.shop,
+      this.objectId,
+      progress,
+      status
+    );
+  }
+
+  async runAutoInstall(
+    extractedPath: string,
+    installPath: string | null
+  ): Promise<void> {
+    const setupExePath = await this.findSetupExe(extractedPath);
+
+    if (!setupExePath) {
+      logger.info(
+        `[GameFilesManager] No setup.exe found in ${extractedPath}, falling back to exe search`
+      );
+      await this.searchAndBindExecutable();
+      return;
+    }
+
+    const effectiveInstallPath =
+      installPath ??
+      path.join(
+        process.platform === "win32"
+          ? "C:\\Program Files"
+          : path.join(process.env.HOME ?? "/home/user", "Games"),
+        removeSymbolsFromName(
+          (await gamesSublevel.get(this.gameKey))?.title ?? this.objectId
+        ).trim() || this.objectId
+      );
+
+    logger.info(
+      `[GameFilesManager] Auto-installing via ${setupExePath} to ${effectiveInstallPath}`
+    );
+
+    try {
+      await downloadsSublevel.put(this.gameKey, {
+        ...(await downloadsSublevel.get(this.gameKey))!,
+        installing: true,
+        installerProgress: 0,
+      });
+      WindowManager.sendDownloadsUpdated();
+    } catch {
+      // Non-fatal
+    }
+
+    this.sendInstallerProgress(0, "running");
+
+    // Estimate target size: compressed file size * 4 (rough ratio for repacks)
+    const download = await downloadsSublevel.get(this.gameKey);
+    const estimatedFinalBytes = (download?.fileSize ?? 0) * 4;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        if (!fs.existsSync(effectiveInstallPath)) return;
+        const currentBytes = await getDirectorySize(effectiveInstallPath);
+        const progress =
+          estimatedFinalBytes > 0
+            ? Math.min(currentBytes / estimatedFinalBytes, 0.95)
+            : 0;
+        this.sendInstallerProgress(progress, "running");
+
+        const currentDownload = await downloadsSublevel.get(this.gameKey);
+        if (currentDownload) {
+          await downloadsSublevel.put(this.gameKey, {
+            ...currentDownload,
+            installerProgress: progress,
+          });
+        }
+      } catch {
+        // Ignore polling errors
+      }
+    }, 1500);
+
+    try {
+      const exitCode = await this.spawnInstaller(setupExePath, effectiveInstallPath);
+
+      clearInterval(pollInterval);
+
+      if (exitCode === 0) {
+        logger.info(
+          `[GameFilesManager] Auto-install completed successfully for ${this.objectId}`
+        );
+        this.sendInstallerProgress(1, "complete");
+
+        try {
+          const currentDownload = await downloadsSublevel.get(this.gameKey);
+          if (currentDownload) {
+            await downloadsSublevel.put(this.gameKey, {
+              ...currentDownload,
+              installing: false,
+              installerProgress: 1,
+              installPath: effectiveInstallPath,
+            });
+          }
+        } catch {
+          // Non-fatal
+        }
+
+        WindowManager.sendDownloadsUpdated();
+        await this.searchAndBindExecutableInPath(effectiveInstallPath);
+      } else {
+        logger.error(
+          `[GameFilesManager] Auto-install exited with code ${exitCode} for ${this.objectId}`
+        );
+        this.sendInstallerProgress(0, "failed");
+        await this.clearInstallingState();
+      }
+    } catch (err) {
+      clearInterval(pollInterval);
+      logger.error(
+        `[GameFilesManager] Auto-install failed for ${this.objectId}`,
+        err
+      );
+      this.sendInstallerProgress(0, "failed");
+      await this.clearInstallingState();
+    }
+  }
+
+  private async clearInstallingState() {
+    try {
+      const currentDownload = await downloadsSublevel.get(this.gameKey);
+      if (currentDownload) {
+        await downloadsSublevel.put(this.gameKey, {
+          ...currentDownload,
+          installing: false,
+          installerProgress: 0,
+        });
+        WindowManager.sendDownloadsUpdated();
+      }
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  private spawnInstaller(
+    setupExePath: string,
+    installPath: string
+  ): Promise<number> {
+    // InnoSetup silent flags: completely silent, no message boxes, set dir, no restart
+    const innoArgs = (dir: string) => [
+      "/VERYSILENT",
+      "/SUPPRESSMSGBOXES",
+      `/DIR=${dir}`,
+      "/NORESTART",
+      "/SP-",
+    ];
+
+    if (process.platform === "win32") {
+      return new Promise((resolve, reject) => {
+        const child = spawn(setupExePath, innoArgs(installPath), {
+          detached: false,
+          stdio: "ignore",
+        });
+        child.once("close", (code) => resolve(code ?? 1));
+        child.once("error", reject);
+      });
+    }
+
+    if (process.platform === "linux") {
+      // Wine maps Z: to the root of the filesystem
+      const wineInstallPath = `Z:${installPath.replace(/\//g, "\\")}`;
+      return Umu.launchExecutable(setupExePath, innoArgs(wineInstallPath), {})
+        .then(() => 0)
+        .catch(() => {
+          // Fallback to bare wine if umu-run is unavailable
+          return new Promise<number>((resolve, reject) => {
+            const child = spawn(
+              "wine",
+              [setupExePath, ...innoArgs(wineInstallPath)],
+              { detached: false, stdio: "ignore" }
+            );
+            child.once("close", (code) => resolve(code ?? 1));
+            child.once("error", reject);
+          });
+        });
+    }
+
+    return Promise.reject(new Error("Auto-install not supported on macOS"));
+  }
+
+  private async searchAndBindExecutableInPath(installPath: string): Promise<void> {
+    try {
+      const game = await gamesSublevel.get(this.gameKey);
+
+      if (!game || game.executablePath) return;
+
+      if (!fs.existsSync(installPath)) return;
+
+      const executableNames = GameExecutables.getExecutablesForGame(this.objectId);
+
+      let foundExePath: string | null = null;
+
+      if (executableNames && executableNames.length > 0) {
+        foundExePath = await this.findExecutableInFolder(installPath, executableNames);
+      }
+
+      // Fallback: find largest non-system exe in install path
+      if (!foundExePath) {
+        foundExePath = await this.findLargestGameExe(installPath);
+      }
+
+      if (foundExePath) {
+        logger.info(
+          `[GameFilesManager] Auto-detected game exe after install for ${this.objectId}: ${foundExePath}`
+        );
+
+        await gamesSublevel.put(this.gameKey, {
+          ...updateGameExecutablePath(game, foundExePath),
+        });
+
+        WindowManager.sendToAppWindows("on-library-batch-complete");
+        await this.createDesktopShortcutForGame(game.title);
+      } else {
+        logger.info(
+          `[GameFilesManager] No game exe found in install path ${installPath} for ${this.objectId}`
+        );
+        // Fall back to searching the extraction folder
+        await this.searchAndBindExecutable();
+      }
+    } catch (err) {
+      logger.error(
+        `[GameFilesManager] Error searching for executable after install: ${this.objectId}`,
+        err
+      );
+    }
+  }
+
+  private readonly SYSTEM_EXE_PATTERNS = [
+    /^unins/i,
+    /^setup/i,
+    /^install/i,
+    /^vcredist/i,
+    /^vc_redist/i,
+    /^dxsetup/i,
+    /^directx/i,
+    /^unarc/i,
+    /^dotnet/i,
+    /^crashreport/i,
+    /^crash_report/i,
+    /^report/i,
+    /^launcher_setup/i,
+  ];
+
+  private async findLargestGameExe(folderPath: string): Promise<string | null> {
+    try {
+      const entries = await fs.promises.readdir(folderPath, {
+        withFileTypes: true,
+        recursive: true,
+      });
+
+      let bestExe: { path: string; size: number } | null = null;
+
+      for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        if (path.extname(entry.name).toLowerCase() !== ".exe") continue;
+
+        const isSystemExe = this.SYSTEM_EXE_PATTERNS.some((pattern) =>
+          pattern.test(entry.name)
+        );
+        if (isSystemExe) continue;
+
+        const parentPath =
+          "parentPath" in entry
+            ? entry.parentPath
+            : (entry as unknown as { path?: string }).path || folderPath;
+
+        const fullPath = path.join(parentPath, entry.name);
+
+        try {
+          const stat = fs.statSync(fullPath);
+          if (!bestExe || stat.size > bestExe.size) {
+            bestExe = { path: fullPath, size: stat.size };
+          }
+        } catch {
+          // Ignore stat errors
+        }
+      }
+
+      return bestExe ? bestExe.path : null;
+    } catch {
+      return null;
+    }
   }
 
   async autoLinkClassicsDiscs(): Promise<void> {

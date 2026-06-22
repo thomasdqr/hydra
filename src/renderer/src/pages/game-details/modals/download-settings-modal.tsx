@@ -60,7 +60,9 @@ export interface DownloadSettingsModalProps {
     fileIndices?: number[],
     selectedFilesSize?: number | null,
     automaticallyDeleteArchiveFiles?: boolean,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    autoInstallAfterExtraction?: boolean,
+    installPath?: string | null
   ) => Promise<{ ok: boolean; error?: string }>;
   repack: GameRepack | null;
 }
@@ -268,6 +270,8 @@ export function DownloadSettingsModal({
   ] = useState(
     userPreferences?.deleteArchiveFilesAfterExtractionByDefault ?? false
   );
+  const [autoInstallEnabled, setAutoInstallEnabled] = useState(false);
+  const [installPath, setInstallPath] = useState("");
   const [selectedDownloader, setSelectedDownloader] =
     useState<Downloader | null>(null);
   const [hasWritePermission, setHasWritePermission] = useState<boolean | null>(
@@ -523,6 +527,8 @@ export function DownloadSettingsModal({
       setAutomaticExtractionEnabled(
         userPreferences?.extractFilesByDefault ?? true
       );
+      setAutoInstallEnabled(false);
+      setInstallPath("");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible]);
@@ -941,6 +947,17 @@ export function DownloadSettingsModal({
     }
   };
 
+  const handleChooseInstallPath = async () => {
+    const { filePaths } = await globalThis.electron.showOpenDialog({
+      defaultPath: installPath || selectedPath,
+      properties: ["openDirectory"],
+    });
+
+    if (filePaths && filePaths.length > 0) {
+      setInstallPath(filePaths[0]);
+    }
+  };
+
   const getButtonContent = () => {
     if (downloadStarting) {
       return (
@@ -990,7 +1007,9 @@ export function DownloadSettingsModal({
           selectedFileIndices,
           totalSelectedSize,
           deleteArchiveFilesAfterExtraction,
-          abortController.signal
+          abortController.signal,
+          automaticExtractionEnabled && autoInstallEnabled,
+          autoInstallEnabled && installPath ? installPath : null
         );
 
         if (
@@ -1450,6 +1469,41 @@ export function DownloadSettingsModal({
             )
           }
         />
+
+        {automaticExtractionEnabled && process.platform !== "darwin" && (
+          <>
+            <CheckboxField
+              label={t("auto_install_after_extraction")}
+              checked={autoInstallEnabled}
+              onChange={() => setAutoInstallEnabled(!autoInstallEnabled)}
+            />
+
+            {autoInstallEnabled && (
+              <div className="download-settings-modal__downloads-path-field">
+                <TextField
+                  value={installPath}
+                  readOnly
+                  disabled
+                  label={t("install_path")}
+                  placeholder={t("install_path_placeholder")}
+                  rightContent={
+                    <Button
+                      className="download-settings-modal__change-path-button"
+                      theme="outline"
+                      onClick={handleChooseInstallPath}
+                      disabled={downloadStarting}
+                    >
+                      {t("change")}
+                    </Button>
+                  }
+                />
+                <p className="download-settings-modal__hint-text">
+                  {t("install_path_hint")}
+                </p>
+              </div>
+            )}
+          </>
+        )}
 
         <Button
           onClick={handlePrimaryButtonClick}

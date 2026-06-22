@@ -103,6 +103,10 @@ export interface Download {
   automaticallyDeleteArchiveFiles: boolean;
   fileIndices?: number[];
   selectedFilesSize?: number | null;
+  autoInstallAfterExtraction?: boolean;
+  installPath?: string | null;
+  installing?: boolean;
+  installerProgress?: number;
 }
 
 export interface DownloadLayoutState {

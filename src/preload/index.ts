@@ -770,6 +770,25 @@ contextBridge.exposeInMainWorld("electron", {
     return () =>
       ipcRenderer.removeListener("on-archive-deletion-prompt", listener);
   },
+  onInstallerProgress: (
+    cb: (
+      shop: GameShop,
+      objectId: string,
+      progress: number,
+      status: "running" | "complete" | "failed"
+    ) => void
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      shop: GameShop,
+      objectId: string,
+      progress: number,
+      status: "running" | "complete" | "failed"
+    ) => cb(shop, objectId, progress, status);
+    ipcRenderer.on("on-installer-progress", listener);
+    return () =>
+      ipcRenderer.removeListener("on-installer-progress", listener);
+  },
   deleteArchive: (filePath: string) =>
     ipcRenderer.invoke("deleteArchive", filePath),
 

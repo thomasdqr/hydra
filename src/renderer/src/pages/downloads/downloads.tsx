@@ -26,6 +26,7 @@ export default function Downloads() {
   const { library, updateLibrary } = useLibrary();
   const { layoutState } = useDownloadLayout();
   const extraction = useAppSelector((state) => state.download.extraction);
+  const installer = useAppSelector((state) => state.download.installer);
 
   const { t } = useTranslation("downloads");
 
@@ -92,10 +93,12 @@ export default function Downloads() {
     const result = library.reduce((prev, next) => {
       if (!next.download) return prev;
 
+      const isInstalling =
+        installer?.visibleId === next.id && installer.status === "running";
       const bucket = getRendererDownloadBucket(next.download, {
         hasLiveProgress:
           lastPacket?.gameId === next.id && next.download.status === "active",
-        isExtracting: extraction?.visibleId === next.id,
+        isExtracting: extraction?.visibleId === next.id || isInstalling,
       });
 
       if (bucket === "hidden") return prev;
@@ -143,7 +146,7 @@ export default function Downloads() {
       queued,
       complete,
     };
-  }, [extraction?.visibleId, lastPacket?.gameId, layoutState, library]);
+  }, [extraction?.visibleId, installer?.visibleId, installer?.status, lastPacket?.gameId, layoutState, library]);
 
   const queuedGameIds = useMemo(
     () => libraryGroup.queued.map((game) => game.id),

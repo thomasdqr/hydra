@@ -26,6 +26,8 @@ import {
   finishClassicsScan,
   hydrateClassicsScan,
   setExtractionProgress,
+  setInstallerProgress,
+  clearInstaller,
   setGameRunning,
   setProfileBackground,
   setUserDetails,
@@ -391,6 +393,19 @@ export function App() {
           t("extraction_failed_title", { ns: "downloads" }),
           t("extraction_failed_description", { ns: "downloads" })
         );
+      }),
+      window.electron.onInstallerProgress((shop, objectId, progress, status) => {
+        dispatch(setInstallerProgress({ shop, objectId, progress, status }));
+        if (status === "complete" || status === "failed") {
+          updateLibrary();
+          if (status === "failed") {
+            showErrorToast(
+              t("installer_failed_title", { ns: "downloads" }),
+              t("installer_failed_description", { ns: "downloads" })
+            );
+          }
+          setTimeout(() => dispatch(clearInstaller()), 3000);
+        }
       }),
       window.electron.onArchiveDeletionPrompt((paths) => {
         setArchivePaths(paths);
