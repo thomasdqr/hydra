@@ -786,8 +786,7 @@ contextBridge.exposeInMainWorld("electron", {
       status: "running" | "complete" | "failed"
     ) => cb(shop, objectId, progress, status);
     ipcRenderer.on("on-installer-progress", listener);
-    return () =>
-      ipcRenderer.removeListener("on-installer-progress", listener);
+    return () => ipcRenderer.removeListener("on-installer-progress", listener);
   },
   deleteArchive: (filePath: string) =>
     ipcRenderer.invoke("deleteArchive", filePath),

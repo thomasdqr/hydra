@@ -1472,39 +1472,39 @@ export function DownloadSettingsModal({
 
         {automaticExtractionEnabled &&
           window.electron.platform !== "darwin" && (
-          <>
-            <CheckboxField
-              label={t("auto_install_after_extraction")}
-              checked={autoInstallEnabled}
-              onChange={() => setAutoInstallEnabled(!autoInstallEnabled)}
-            />
+            <>
+              <CheckboxField
+                label={t("auto_install_after_extraction")}
+                checked={autoInstallEnabled}
+                onChange={() => setAutoInstallEnabled(!autoInstallEnabled)}
+              />
 
-            {autoInstallEnabled && (
-              <div className="download-settings-modal__downloads-path-field">
-                <TextField
-                  value={installPath}
-                  readOnly
-                  disabled
-                  label={t("install_path")}
-                  placeholder={t("install_path_placeholder")}
-                  rightContent={
-                    <Button
-                      className="download-settings-modal__change-path-button"
-                      theme="outline"
-                      onClick={handleChooseInstallPath}
-                      disabled={downloadStarting}
-                    >
-                      {t("change")}
-                    </Button>
-                  }
-                />
-                <p className="download-settings-modal__hint-text">
-                  {t("install_path_hint")}
-                </p>
-              </div>
-            )}
-          </>
-        )}
+              {autoInstallEnabled && (
+                <div className="download-settings-modal__downloads-path-field">
+                  <TextField
+                    value={installPath}
+                    readOnly
+                    disabled
+                    label={t("install_path")}
+                    placeholder={t("install_path_placeholder")}
+                    rightContent={
+                      <Button
+                        className="download-settings-modal__change-path-button"
+                        theme="outline"
+                        onClick={handleChooseInstallPath}
+                        disabled={downloadStarting}
+                      >
+                        {t("change")}
+                      </Button>
+                    }
+                  />
+                  <p className="download-settings-modal__hint-text">
+                    {t("install_path_hint")}
+                  </p>
+                </div>
+              )}
+            </>
+          )}
 
         <Button
           onClick={handlePrimaryButtonClick}

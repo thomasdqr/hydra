@@ -414,7 +414,10 @@ export class GameFilesManager {
     return null;
   }
 
-  private sendInstallerProgress(progress: number, status: "running" | "complete" | "failed") {
+  private sendInstallerProgress(
+    progress: number,
+    status: "running" | "complete" | "failed"
+  ) {
     WindowManager.sendToAppWindows(
       "on-installer-progress",
       this.shop,
@@ -530,7 +533,10 @@ export class GameFilesManager {
     void pollProgress();
 
     try {
-      const exitCode = await this.spawnInstaller(setupExePath, effectiveInstallPath);
+      const exitCode = await this.spawnInstaller(
+        setupExePath,
+        effectiveInstallPath
+      );
 
       pollingActive = false;
 
@@ -714,7 +720,9 @@ export class GameFilesManager {
     });
   }
 
-  private async searchAndBindExecutableInPath(installPath: string): Promise<void> {
+  private async searchAndBindExecutableInPath(
+    installPath: string
+  ): Promise<void> {
     try {
       const game = await gamesSublevel.get(this.gameKey);
 
@@ -722,12 +730,17 @@ export class GameFilesManager {
 
       if (!fs.existsSync(installPath)) return;
 
-      const executableNames = GameExecutables.getExecutablesForGame(this.objectId);
+      const executableNames = GameExecutables.getExecutablesForGame(
+        this.objectId
+      );
 
       let foundExePath: string | null = null;
 
       if (executableNames && executableNames.length > 0) {
-        foundExePath = await this.findExecutableInFolder(installPath, executableNames);
+        foundExePath = await this.findExecutableInFolder(
+          installPath,
+          executableNames
+        );
       }
 
       // Fallback: find largest non-system exe in install path

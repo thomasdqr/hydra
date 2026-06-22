@@ -353,19 +353,23 @@ function HeroDownloadView({
                     {t("installing")}
                   </span>
                 )}
-                {!isGameExtracting && !isGameInstalling && lastPacket?.isCheckingFiles && (
-                  <span className="download-group__progress-status">
-                    {t("checking_files")}
-                  </span>
-                )}
-                {!isGameExtracting && !isGameInstalling && !lastPacket?.isCheckingFiles && (
-                  <span className="download-group__progress-size">
-                    <DownloadIcon size={14} />
-                    {isGameDownloading && lastPacket
-                      ? `${formatBytes(lastPacket.download.bytesDownloaded)} / ${finalDownloadSize}`
-                      : `${formatBytes(game.download?.bytesDownloaded ?? 0)} / ${finalDownloadSize}`}
-                  </span>
-                )}
+                {!isGameExtracting &&
+                  !isGameInstalling &&
+                  lastPacket?.isCheckingFiles && (
+                    <span className="download-group__progress-status">
+                      {t("checking_files")}
+                    </span>
+                  )}
+                {!isGameExtracting &&
+                  !isGameInstalling &&
+                  !lastPacket?.isCheckingFiles && (
+                    <span className="download-group__progress-size">
+                      <DownloadIcon size={14} />
+                      {isGameDownloading && lastPacket
+                        ? `${formatBytes(lastPacket.download.bytesDownloaded)} / ${finalDownloadSize}`
+                        : `${formatBytes(game.download?.bytesDownloaded ?? 0)} / ${finalDownloadSize}`}
+                    </span>
+                  )}
                 <span></span>
               </div>
               <div className="download-group__progress-info-row">
@@ -966,7 +970,8 @@ export function DownloadGroup({
   if (isDownloadingGroup && library.length > 0) {
     const game = library[0];
     const isGameExtracting = extraction?.visibleId === game.id;
-    const isGameInstalling = installer?.visibleId === game.id && installer?.status === "running";
+    const isGameInstalling =
+      installer?.visibleId === game.id && installer?.status === "running";
     const isGameDownloading =
       isGameDownloadingMap[game.id] && !isGameExtracting && !isGameInstalling;
     const downloadSpeed = isGameDownloading
@@ -1082,7 +1087,8 @@ export function DownloadGroup({
                           {t("extracting")} (
                           {Math.round(extraction.progress * 100)}%)
                         </span>
-                      ) : installer?.visibleId === game.id && installer.status === "running" ? (
+                      ) : installer?.visibleId === game.id &&
+                        installer.status === "running" ? (
                         <span className="download-group__simple-extracting">
                           {t("installing")} (
                           {Math.round(installer.progress * 100)}%)

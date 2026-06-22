@@ -115,7 +115,10 @@ export function HeroPanelPlaytime() {
         <p>{t("playing_now")}</p>
         {isExtracting && extractionInProgressInfo}
         {isInstalling && !isExtracting && installerInProgressInfo}
-        {!isExtracting && !isInstalling && hasDownload && downloadInProgressInfo}
+        {!isExtracting &&
+          !isInstalling &&
+          hasDownload &&
+          downloadInProgressInfo}
       </>
     );
   }

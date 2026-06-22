@@ -146,7 +146,14 @@ export default function Downloads() {
       queued,
       complete,
     };
-  }, [extraction?.visibleId, installer?.visibleId, installer?.status, lastPacket?.gameId, layoutState, library]);
+  }, [
+    extraction?.visibleId,
+    installer?.visibleId,
+    installer?.status,
+    lastPacket?.gameId,
+    layoutState,
+    library,
+  ]);
 
   const queuedGameIds = useMemo(
     () => libraryGroup.queued.map((game) => game.id),
