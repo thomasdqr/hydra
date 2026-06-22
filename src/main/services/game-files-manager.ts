@@ -31,6 +31,112 @@ import { Umu } from "./umu";
 
 const PROGRESS_THROTTLE_MS = 1000;
 
+// Launches a Windows installer elevated and, best-effort, mutes its audio
+// session (FitGirl/InnoSetup repacks play music no flag can silence). Exit code
+// is the installer's; a declined UAC prompt resolves to 1223 (ERROR_CANCELLED).
+const ELEVATED_INSTALLER_SCRIPT = `
+param(
+  [Parameter(Mandatory = $true)][string]$Exe,
+  [string]$ProcessName = 'setup',
+  [string]$InstallDir = '',
+  [string]$ArgsB64 = ''
+)
+$ErrorActionPreference = 'Stop'
+$workDir = Split-Path -Parent $Exe
+
+$muteReady = $false
+try {
+  Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace HydraAudio {
+  [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")] public class MMDeviceEnumerator { }
+  public enum EDataFlow { eRender, eCapture, eAll }
+  public enum ERole { eConsole, eMultimedia, eCommunications }
+  [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IMMDeviceEnumerator { int N1(); [PreserveSig] int GetDefaultAudioEndpoint(EDataFlow d, ERole r, out IMMDevice ppDevice); }
+  [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IMMDevice { [PreserveSig] int Activate(ref Guid iid, int ctx, IntPtr p, [MarshalAs(UnmanagedType.IUnknown)] out object o); }
+  [Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IAudioSessionManager2 { int N1(); int N2(); [PreserveSig] int GetSessionEnumerator(out IAudioSessionEnumerator e); }
+  [Guid("E2F5BB11-0570-40CA-ACDD-3AA01277DEE8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IAudioSessionEnumerator { [PreserveSig] int GetCount(out int c); [PreserveSig] int GetSession(int i, out IAudioSessionControl2 s); }
+  [Guid("BFB7FF88-7239-4FC9-8FA2-07C950BE9C6D"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface IAudioSessionControl2 { int N0(); int N1(); int N2(); int N3(); int N4(); int N5(); int N6(); int N7(); int N8(); int N9(); int N10(); [PreserveSig] int GetProcessId(out uint pid); }
+  [Guid("87CE5498-68D6-44E5-9215-6DA47EF883D8"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  public interface ISimpleAudioVolume { int N0(); int N1(); [PreserveSig] int SetMute(bool m, ref Guid ctx); [PreserveSig] int GetMute(out bool m); }
+  public static class Mixer {
+    static Guid IID = new Guid("77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F");
+    public static void MuteByProcessName(string name) {
+      var en = (IMMDeviceEnumerator)(new MMDeviceEnumerator());
+      IMMDevice dev; if (en.GetDefaultAudioEndpoint(EDataFlow.eRender, ERole.eMultimedia, out dev) != 0) return;
+      object mo; if (dev.Activate(ref IID, 23, IntPtr.Zero, out mo) != 0) return;
+      var mgr = (IAudioSessionManager2)mo;
+      IAudioSessionEnumerator se; if (mgr.GetSessionEnumerator(out se) != 0) return;
+      int c; se.GetCount(out c);
+      for (int i = 0; i < c; i++) {
+        IAudioSessionControl2 ctl; if (se.GetSession(i, out ctl) != 0) continue;
+        uint pid; if (ctl.GetProcessId(out pid) == 0) {
+          try {
+            var p = System.Diagnostics.Process.GetProcessById((int)pid);
+            if (string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)) {
+              var v = (ISimpleAudioVolume)ctl; Guid g = Guid.Empty; v.SetMute(true, ref g);
+            }
+          } catch { }
+        }
+        Marshal.ReleaseComObject(ctl);
+      }
+    }
+  }
+}
+'@
+  $muteReady = $true
+} catch { $muteReady = $false }
+
+try {
+  # Use ProcessStartInfo, not Start-Process: FitGirl repack folders contain
+  # square brackets (e.g. "[FitGirl Repack]") which Start-Process treats as
+  # wildcards and fails to resolve. ProcessStartInfo uses the paths literally.
+  # UseShellExecute + Verb 'runas' triggers the UAC elevation prompt.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $psi.WorkingDirectory = $workDir
+  $psi.UseShellExecute = $true
+  $psi.Verb = 'runas'
+  if ($ArgsB64) {
+    $psi.Arguments = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($ArgsB64))
+  }
+  $proc = [System.Diagnostics.Process]::Start($psi)
+} catch {
+  exit 1223
+}
+
+# Give the installer a moment to register, then wait for it (and any relaunched
+# child) to finish, muting throughout.
+Start-Sleep -Milliseconds 1500
+while ($true) {
+  if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+  $alive = $false
+  if ($proc) { try { if (-not $proc.HasExited) { $alive = $true } } catch { $alive = $false } }
+  if (-not $alive -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) { $alive = $true }
+  if (-not $alive) { break }
+  Start-Sleep -Milliseconds 700
+}
+
+$code = 1
+try { if ($proc -and $proc.HasExited) { $code = $proc.ExitCode } } catch { $code = 0 }
+
+# A relaunched installer can exit non-zero while the real install (in a child)
+# succeeds, so treat a populated target dir as success.
+if ($code -ne 0 -and $InstallDir -and (Test-Path -LiteralPath $InstallDir)) {
+  try {
+    $sz = (Get-ChildItem -LiteralPath $InstallDir -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+    if ($sz -gt 52428800) { $code = 0 }
+  } catch { }
+}
+exit $code
+`;
+
 export class GameFilesManager {
   private lastProgressUpdateTime = 0;
   private lastProgressUpdateValue = 0;
@@ -257,11 +363,21 @@ export class GameFilesManager {
     this.lastProgressUpdateValue = 0;
 
     if (download.autoInstallAfterExtraction && download.folderName) {
-      const extractedPath = path.join(
+      const downloadTarget = path.join(
         download.downloadPath,
         download.folderName
       );
-      await this.runAutoInstall(extractedPath, download.installPath ?? null);
+
+      // folderName may point at a loose data file inside the repack folder
+      // (e.g. FitGirl repacks land as "<repack>/fg-01.bin" with no archive to
+      // extract). In that case install from the containing folder so
+      // findSetupExe can locate setup.exe.
+      const installSource =
+        fs.existsSync(downloadTarget) && fs.statSync(downloadTarget).isFile()
+          ? path.dirname(downloadTarget)
+          : downloadTarget;
+
+      await this.runAutoInstall(installSource, download.installPath ?? null);
     } else {
       await this.searchAndBindExecutable();
     }
@@ -322,16 +438,37 @@ export class GameFilesManager {
       return;
     }
 
-    const effectiveInstallPath =
+    const cleanTitle =
+      removeSymbolsFromName(
+        (await gamesSublevel.get(this.gameKey))?.title ?? this.objectId
+      ).trim() || this.objectId;
+
+    let effectiveInstallPath =
       installPath ??
       path.join(
         process.platform === "win32"
           ? "C:\\Program Files"
           : path.join(process.env.HOME ?? "/home/user", "Games"),
-        removeSymbolsFromName(
-          (await gamesSublevel.get(this.gameKey))?.title ?? this.objectId
-        ).trim() || this.objectId
+        cleanTitle
       );
+
+    // Never install into the repack's own folder: it holds setup.exe and the
+    // .bin data files, and InnoSetup refuses to install into its source dir
+    // (exit code 1). Redirect to a clean sibling folder next to the repack.
+    const isWithin = (target: string, root: string) => {
+      const rel = path.relative(path.resolve(root), path.resolve(target));
+      return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+    };
+    if (
+      isWithin(effectiveInstallPath, extractedPath) ||
+      isWithin(effectiveInstallPath, path.dirname(setupExePath))
+    ) {
+      const fallback = path.join(path.dirname(extractedPath), cleanTitle);
+      logger.warn(
+        `[GameFilesManager] Install path "${effectiveInstallPath}" is inside the repack source; redirecting to "${fallback}"`
+      );
+      effectiveInstallPath = fallback;
+    }
 
     logger.info(
       `[GameFilesManager] Auto-installing via ${setupExePath} to ${effectiveInstallPath}`
@@ -354,32 +491,48 @@ export class GameFilesManager {
     const download = await downloadsSublevel.get(this.gameKey);
     const estimatedFinalBytes = (download?.fileSize ?? 0) * 4;
 
-    const pollInterval = setInterval(async () => {
-      try {
-        if (!fs.existsSync(effectiveInstallPath)) return;
-        const currentBytes = await getDirectorySize(effectiveInstallPath);
-        const progress =
-          estimatedFinalBytes > 0
-            ? Math.min(currentBytes / estimatedFinalBytes, 0.95)
-            : 0;
-        this.sendInstallerProgress(progress, "running");
+    // Poll without overlap: each directory walk must finish before the next is
+    // scheduled. A repack installer churns thousands of files, so a fixed
+    // setInterval would stack concurrent recursive walks and saturate the main
+    // process event loop (UI freeze) until it runs out of memory.
+    let pollingActive = true;
+    const pollProgress = async () => {
+      while (pollingActive) {
+        try {
+          if (fs.existsSync(effectiveInstallPath)) {
+            const currentBytes = await getDirectorySize(effectiveInstallPath);
+            // The walk may outlast the installer; don't emit a stale "running"
+            // update after the final "complete"/"failed" status was sent.
+            if (!pollingActive) break;
+            const progress =
+              estimatedFinalBytes > 0
+                ? Math.min(currentBytes / estimatedFinalBytes, 0.95)
+                : 0;
+            this.sendInstallerProgress(progress, "running");
 
-        const currentDownload = await downloadsSublevel.get(this.gameKey);
-        if (currentDownload) {
-          await downloadsSublevel.put(this.gameKey, {
-            ...currentDownload,
-            installerProgress: progress,
-          });
+            const currentDownload = await downloadsSublevel.get(this.gameKey);
+            if (currentDownload) {
+              await downloadsSublevel.put(this.gameKey, {
+                ...currentDownload,
+                installerProgress: progress,
+              });
+            }
+          }
+        } catch {
+          // Ignore polling errors
         }
-      } catch {
-        // Ignore polling errors
+
+        if (!pollingActive) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
       }
-    }, 1500);
+    };
+
+    void pollProgress();
 
     try {
       const exitCode = await this.spawnInstaller(setupExePath, effectiveInstallPath);
 
-      clearInterval(pollInterval);
+      pollingActive = false;
 
       if (exitCode === 0) {
         logger.info(
@@ -411,7 +564,7 @@ export class GameFilesManager {
         await this.clearInstallingState();
       }
     } catch (err) {
-      clearInterval(pollInterval);
+      pollingActive = false;
       logger.error(
         `[GameFilesManager] Auto-install failed for ${this.objectId}`,
         err
@@ -451,13 +604,32 @@ export class GameFilesManager {
     ];
 
     if (process.platform === "win32") {
-      return new Promise((resolve, reject) => {
-        const child = spawn(setupExePath, innoArgs(installPath), {
+      const args = innoArgs(installPath);
+      // Run from the setup.exe folder: FitGirl/InnoSetup installers resolve
+      // their fg-*.bin data files relative to the working directory, so a wrong
+      // cwd makes the install abort (exit 1) without writing anything.
+      const setupDir = path.dirname(setupExePath);
+
+      return new Promise<number>((resolve, reject) => {
+        const child = spawn(setupExePath, args, {
+          cwd: setupDir,
           detached: false,
           stdio: "ignore",
         });
         child.once("close", (code) => resolve(code ?? 1));
         child.once("error", reject);
+      }).catch((error: NodeJS.ErrnoException) => {
+        // FitGirl/InnoSetup installers usually require elevation; spawning the
+        // exe directly fails with EACCES. Relaunch through ShellExecute "runas"
+        // (Start-Process -Verb RunAs) so Windows shows a UAC prompt.
+        if (error.code === "EACCES") {
+          return this.spawnElevatedInstallerWindows(
+            setupExePath,
+            args,
+            installPath
+          );
+        }
+        throw error;
       });
     }
 
@@ -481,6 +653,65 @@ export class GameFilesManager {
     }
 
     return Promise.reject(new Error("Auto-install not supported on macOS"));
+  }
+
+  private spawnElevatedInstallerWindows(
+    setupExePath: string,
+    args: string[],
+    installPath: string
+  ): Promise<number> {
+    // Launch the installer elevated (UAC) and keep its audio muted as a
+    // best-effort: FitGirl/InnoSetup installers play music that no command-line
+    // flag can disable, so we mute the "setup" process audio session via the
+    // Windows Core Audio API on a short loop until the installer exits. A
+    // declined UAC prompt is reported as a non-zero exit (1223 = ERROR_CANCELLED)
+    // so the auto-install fails gracefully. Muting failures never abort the run.
+    const script = ELEVATED_INSTALLER_SCRIPT;
+    const scriptPath = path.join(
+      app.getPath("temp"),
+      "hydra-elevated-install.ps1"
+    );
+
+    // Pass the installer args as one base64 string, not a PowerShell array:
+    // `powershell -File` binds only the first value to a [string[]] param and
+    // errors on the rest. The string is decoded straight into
+    // ProcessStartInfo.Arguments, so quote args that contain spaces.
+    const argsString = args
+      .map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg))
+      .join(" ");
+    const argsB64 = Buffer.from(argsString, "utf16le").toString("base64");
+
+    return new Promise<number>((resolve, reject) => {
+      try {
+        fs.writeFileSync(scriptPath, script, "utf8");
+      } catch (error) {
+        reject(error as Error);
+        return;
+      }
+
+      const child = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          scriptPath,
+          "-Exe",
+          setupExePath,
+          "-ProcessName",
+          "setup",
+          "-InstallDir",
+          installPath,
+          "-ArgsB64",
+          argsB64,
+        ],
+        { detached: false, stdio: "ignore" }
+      );
+      child.once("close", (code) => resolve(code ?? 1));
+      child.once("error", reject);
+    });
   }
 
   private async searchAndBindExecutableInPath(installPath: string): Promise<void> {

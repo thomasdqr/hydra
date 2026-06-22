@@ -1470,7 +1470,8 @@ export function DownloadSettingsModal({
           }
         />
 
-        {automaticExtractionEnabled && process.platform !== "darwin" && (
+        {automaticExtractionEnabled &&
+          window.electron.platform !== "darwin" && (
           <>
             <CheckboxField
               label={t("auto_install_after_extraction")}
