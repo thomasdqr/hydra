@@ -105,8 +105,6 @@ export interface Download {
   selectedFilesSize?: number | null;
   autoInstallAfterExtraction?: boolean;
   installPath?: string | null;
-  installing?: boolean;
-  installerProgress?: number;
 }
 
 export interface DownloadLayoutState {

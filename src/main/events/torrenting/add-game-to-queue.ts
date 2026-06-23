@@ -60,8 +60,6 @@ const addGameToQueue = async (
     selectedFilesSize,
     autoInstallAfterExtraction: autoInstallAfterExtraction ?? false,
     installPath: installPath ?? null,
-    installing: false,
-    installerProgress: 0,
   };
 
   try {

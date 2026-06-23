@@ -61,8 +61,6 @@ const startGameDownload = async (
     fileSize: selectedFilesSize ?? null,
     autoInstallAfterExtraction: autoInstallAfterExtraction ?? false,
     installPath: installPath ?? null,
-    installing: false,
-    installerProgress: 0,
   };
 
   try {

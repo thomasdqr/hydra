@@ -27,7 +27,6 @@ import { deleteArchiveFile } from "@main/events/library/delete-archive";
 import { publishExtractionCompleteNotification } from "./notifications";
 import { SystemPath } from "./system-path";
 import { WindowManager } from "./window-manager";
-import { Umu } from "./umu";
 
 const PROGRESS_THROTTLE_MS = 1000;
 
@@ -563,17 +562,6 @@ export class GameFilesManager {
       `[GameFilesManager] Auto-installing via ${setupExePath} to ${effectiveInstallPath}`
     );
 
-    try {
-      await downloadsSublevel.put(this.gameKey, {
-        ...(await downloadsSublevel.get(this.gameKey))!,
-        installing: true,
-        installerProgress: 0,
-      });
-      WindowManager.sendDownloadsUpdated();
-    } catch {
-      // Non-fatal
-    }
-
     this.sendInstallerProgress(0, "running");
 
     // Estimate installed size from the compressed download (repacks decompress
@@ -605,14 +593,6 @@ export class GameFilesManager {
                 ? Math.min(grownBytes / estimatedGrowthBytes, 0.99)
                 : 0;
             this.sendInstallerProgress(progress, "running");
-
-            const currentDownload = await downloadsSublevel.get(this.gameKey);
-            if (currentDownload) {
-              await downloadsSublevel.put(this.gameKey, {
-                ...currentDownload,
-                installerProgress: progress,
-              });
-            }
           }
         } catch {
           // Ignore polling errors
@@ -638,29 +618,12 @@ export class GameFilesManager {
           `[GameFilesManager] Auto-install completed successfully for ${this.objectId}`
         );
         this.sendInstallerProgress(1, "complete");
-
-        try {
-          const currentDownload = await downloadsSublevel.get(this.gameKey);
-          if (currentDownload) {
-            await downloadsSublevel.put(this.gameKey, {
-              ...currentDownload,
-              installing: false,
-              installerProgress: 1,
-              installPath: effectiveInstallPath,
-            });
-          }
-        } catch {
-          // Non-fatal
-        }
-
-        WindowManager.sendDownloadsUpdated();
         await this.searchAndBindExecutableInPath(effectiveInstallPath);
       } else {
         logger.error(
           `[GameFilesManager] Auto-install exited with code ${exitCode} for ${this.objectId}`
         );
         this.sendInstallerProgress(0, "failed");
-        await this.clearInstallingState();
       }
     } catch (err) {
       pollingActive = false;
@@ -669,23 +632,6 @@ export class GameFilesManager {
         err
       );
       this.sendInstallerProgress(0, "failed");
-      await this.clearInstallingState();
-    }
-  }
-
-  private async clearInstallingState() {
-    try {
-      const currentDownload = await downloadsSublevel.get(this.gameKey);
-      if (currentDownload) {
-        await downloadsSublevel.put(this.gameKey, {
-          ...currentDownload,
-          installing: false,
-          installerProgress: 0,
-        });
-        WindowManager.sendDownloadsUpdated();
-      }
-    } catch {
-      // Non-fatal
     }
   }
 
@@ -732,26 +678,11 @@ export class GameFilesManager {
       });
     }
 
-    if (process.platform === "linux") {
-      // Wine maps Z: to the root of the filesystem
-      const wineInstallPath = `Z:${installPath.replace(/\//g, "\\")}`;
-      return Umu.launchExecutable(setupExePath, innoArgs(wineInstallPath), {})
-        .then(() => 0)
-        .catch(() => {
-          // Fallback to bare wine if umu-run is unavailable
-          return new Promise<number>((resolve, reject) => {
-            const child = spawn(
-              "wine",
-              [setupExePath, ...innoArgs(wineInstallPath)],
-              { detached: false, stdio: "ignore" }
-            );
-            child.once("close", (code) => resolve(code ?? 1));
-            child.once("error", reject);
-          });
-        });
-    }
-
-    return Promise.reject(new Error("Auto-install not supported on macOS"));
+    // Auto-install is currently only supported on Windows (the modal toggle is
+    // gated to win32). The repack installers are Windows InnoSetup executables.
+    return Promise.reject(
+      new Error("Auto-install is only supported on Windows")
+    );
   }
 
   private spawnElevatedInstallerWindows(
@@ -759,12 +690,10 @@ export class GameFilesManager {
     args: string[],
     installPath: string
   ): Promise<number> {
-    // Launch the installer elevated (UAC) and keep its audio muted as a
-    // best-effort: FitGirl/InnoSetup installers play music that no command-line
-    // flag can disable, so we mute the "setup" process audio session via the
-    // Windows Core Audio API on a short loop until the installer exits. A
-    // declined UAC prompt is reported as a non-zero exit (1223 = ERROR_CANCELLED)
-    // so the auto-install fails gracefully. Muting failures never abort the run.
+    // Run ELEVATED_INSTALLER_SCRIPT (see its header): one UAC prompt, then a
+    // clean game-only silent install (skip DirectX/redist, mute the installer
+    // music, skip file verification and the hosts-redirection step). A declined
+    // UAC resolves to exit 1223 (ERROR_CANCELLED) so auto-install fails cleanly.
     const script = ELEVATED_INSTALLER_SCRIPT;
     const scriptPath = path.join(
       app.getPath("temp"),
