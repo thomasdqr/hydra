@@ -31,9 +31,13 @@ import { Umu } from "./umu";
 
 const PROGRESS_THROTTLE_MS = 1000;
 
-// Launches a Windows installer elevated and, best-effort, mutes its audio
-// session (FitGirl/InnoSetup repacks play music no flag can silence). Exit code
-// is the installer's; a declined UAC prompt resolves to 1223 (ERROR_CANCELLED).
+// Runs a FitGirl/InnoSetup installer for a clean, game-only silent install.
+// The script self-elevates ONCE (single UAC) so everything below runs at the
+// same integrity as setup.exe: that lets it mute setup's music and kill the
+// file verifier reliably (a non-elevated process cannot touch an elevated one).
+// Steps: probe the repack's components via /SAVEINF, drop DirectX/redist-style
+// ones, then install with /COMPONENTS while muting audio and killing QuickSFV.
+// Exit code is the installer's; a declined UAC resolves to 1223 (ERROR_CANCELLED).
 const ELEVATED_INSTALLER_SCRIPT = `
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
@@ -42,6 +46,32 @@ param(
   [string]$ArgsB64 = ''
 )
 $ErrorActionPreference = 'Stop'
+
+$baseArgs = ''
+if ($ArgsB64) { $baseArgs = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($ArgsB64)) }
+
+$isAdmin = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
+
+if (-not $isAdmin) {
+  # Elevate this whole script once. FitGirl paths contain square brackets, so we
+  # build the argument string literally (no Start-Process wildcard expansion).
+  try {
+    $relArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $PSCommandPath + '" -Exe "' + $Exe + '" -ProcessName "' + $ProcessName + '" -InstallDir "' + $InstallDir + '" -ArgsB64 "' + $ArgsB64 + '"'
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'powershell.exe'
+    $psi.Arguments = $relArgs
+    $psi.UseShellExecute = $true
+    $psi.Verb = 'runas'
+    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $elevated = [System.Diagnostics.Process]::Start($psi)
+  } catch {
+    exit 1223
+  }
+  $elevated.WaitForExit()
+  try { exit $elevated.ExitCode } catch { exit 0 }
+}
+
+# ----- Elevated from here -----
 $workDir = Split-Path -Parent $Exe
 
 $muteReady = $false
@@ -93,34 +123,60 @@ namespace HydraAudio {
   $muteReady = $true
 } catch { $muteReady = $false }
 
-try {
-  # Use ProcessStartInfo, not Start-Process: FitGirl repack folders contain
-  # square brackets (e.g. "[FitGirl Repack]") which Start-Process treats as
-  # wildcards and fails to resolve. ProcessStartInfo uses the paths literally.
-  # UseShellExecute + Verb 'runas' triggers the UAC elevation prompt.
-  $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = $Exe
-  $psi.WorkingDirectory = $workDir
-  $psi.UseShellExecute = $true
-  $psi.Verb = 'runas'
-  if ($ArgsB64) {
-    $psi.Arguments = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($ArgsB64))
-  }
-  $proc = [System.Diagnostics.Process]::Start($psi)
-} catch {
-  exit 1223
+function Start-Setup([string]$arguments) {
+  $p = New-Object System.Diagnostics.ProcessStartInfo
+  $p.FileName = $Exe
+  $p.WorkingDirectory = $workDir
+  $p.UseShellExecute = $false
+  $p.Arguments = $arguments
+  return [System.Diagnostics.Process]::Start($p)
 }
 
-# Give the installer a moment to register, then wait for it (and any relaunched
-# child) to finish, muting throughout.
-Start-Sleep -Milliseconds 1500
+# Pass 1: discover the repack's selected components via /SAVEINF (written before
+# any files are decompressed), then drop DirectX/redist-style components so only
+# the game is installed. The probe is killed as soon as the INF appears.
+$components = ''
+try {
+  $infFile = [System.IO.Path]::Combine($env:TEMP, 'hydra-saveinf.inf')
+  if (Test-Path -LiteralPath $infFile) { Remove-Item -LiteralPath $infFile -Force }
+  $probeDir = [System.IO.Path]::Combine($env:TEMP, 'hydra-probe')
+  $probe = Start-Setup ('/VERYSILENT /SUPPRESSMSGBOXES "/DIR=' + $probeDir + '" /NORESTART /SP- "/SAVEINF=' + $infFile + '"')
+  for ($i = 0; $i -lt 60; $i++) {
+    if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+    if (Test-Path -LiteralPath $infFile) { break }
+    Start-Sleep -Milliseconds 500
+  }
+  Start-Sleep -Milliseconds 300
+  try { if ($probe -and -not $probe.HasExited) { $probe.Kill() } } catch { }
+  Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $infFile) {
+    $line = (Get-Content -LiteralPath $infFile | Where-Object { $_ -match '^Components=' } | Select-Object -First 1)
+    if ($line) {
+      $all = ($line -replace '^Components=', '').Split(',') | Where-Object { $_ -ne '' }
+      $kept = $all | Where-Object { $_ -notmatch '(?i)directx|redist|vcredist|vc_redist|dotnet|visualc|dxsetup' }
+      if ($kept) { $components = ($kept -join ',') }
+    }
+  }
+  try { if (Test-Path -LiteralPath $probeDir) { Remove-Item -LiteralPath $probeDir -Recurse -Force } } catch { }
+} catch { $components = '' }
+
+# Pass 2: real install (game-only components) while muting setup's audio and
+# killing the file verifier (QuickSFV) as soon as it spawns.
+$installArgs = $baseArgs
+if ($components) { $installArgs = $installArgs + ' "/COMPONENTS=' + $components + '"' }
+
+$proc = $null
+try { $proc = Start-Setup $installArgs } catch { exit 1 }
+
+Start-Sleep -Milliseconds 1200
 while ($true) {
   if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+  Get-Process -Name 'QuickSFV' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   $alive = $false
   if ($proc) { try { if (-not $proc.HasExited) { $alive = $true } } catch { $alive = $false } }
   if (-not $alive -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) { $alive = $true }
   if (-not $alive) { break }
-  Start-Sleep -Milliseconds 700
+  Start-Sleep -Milliseconds 500
 }
 
 $code = 1
@@ -490,9 +546,15 @@ export class GameFilesManager {
 
     this.sendInstallerProgress(0, "running");
 
-    // Estimate target size: compressed file size * 4 (rough ratio for repacks)
+    // Estimate installed size from the compressed download (repacks decompress
+    // to roughly 1.5-2.5x). Measure growth from the directory's initial size so
+    // a pre-populated target (e.g. an existing folder) doesn't peg the bar at
+    // the cap immediately.
     const download = await downloadsSublevel.get(this.gameKey);
-    const estimatedFinalBytes = (download?.fileSize ?? 0) * 4;
+    const estimatedGrowthBytes = (download?.fileSize ?? 0) * 2;
+    const initialBytes = fs.existsSync(effectiveInstallPath)
+      ? await getDirectorySize(effectiveInstallPath)
+      : 0;
 
     // Poll without overlap: each directory walk must finish before the next is
     // scheduled. A repack installer churns thousands of files, so a fixed
@@ -507,9 +569,10 @@ export class GameFilesManager {
             // The walk may outlast the installer; don't emit a stale "running"
             // update after the final "complete"/"failed" status was sent.
             if (!pollingActive) break;
+            const grownBytes = Math.max(0, currentBytes - initialBytes);
             const progress =
-              estimatedFinalBytes > 0
-                ? Math.min(currentBytes / estimatedFinalBytes, 0.95)
+              estimatedGrowthBytes > 0
+                ? Math.min(grownBytes / estimatedGrowthBytes, 0.99)
                 : 0;
             this.sendInstallerProgress(progress, "running");
 
