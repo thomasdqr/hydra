@@ -109,7 +109,9 @@ namespace HydraAudio {
         uint pid; if (ctl.GetProcessId(out pid) == 0) {
           try {
             var p = System.Diagnostics.Process.GetProcessById((int)pid);
-            if (string.Equals(p.ProcessName, name, StringComparison.OrdinalIgnoreCase)) {
+            // Match "setup" AND InnoSetup's extracted engine "setup.tmp" (which
+            // is the process that actually plays the repack music).
+            if (p.ProcessName.StartsWith(name, StringComparison.OrdinalIgnoreCase)) {
               var v = (ISimpleAudioVolume)ctl; Guid g = Guid.Empty; v.SetMute(true, ref g);
             }
           } catch { }
@@ -148,7 +150,13 @@ try {
   }
   Start-Sleep -Milliseconds 300
   try { if ($probe -and -not $probe.HasExited) { $probe.Kill() } } catch { }
-  Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Kill the loader AND the extracted "setup.tmp" engine, then wait until both
+  # are gone so the probe's music can't bleed into the real install.
+  Get-Process | Where-Object { $_.ProcessName -like 'setup*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+  for ($w = 0; $w -lt 24; $w++) {
+    if (-not (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { break }
+    Start-Sleep -Milliseconds 250
+  }
   if (Test-Path -LiteralPath $infFile) {
     $line = (Get-Content -LiteralPath $infFile | Where-Object { $_ -match '^Components=' } | Select-Object -First 1)
     if ($line) {
@@ -171,10 +179,10 @@ try { $proc = Start-Setup $installArgs } catch { exit 1 }
 Start-Sleep -Milliseconds 1200
 while ($true) {
   if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
-  Get-Process -Name 'QuickSFV' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+  Get-Process | Where-Object { $_.ProcessName -like 'QuickSFV*' } | Stop-Process -Force -ErrorAction SilentlyContinue
   $alive = $false
   if ($proc) { try { if (-not $proc.HasExited) { $alive = $true } } catch { $alive = $false } }
-  if (-not $alive -and (Get-Process -Name $ProcessName -ErrorAction SilentlyContinue)) { $alive = $true }
+  if (-not $alive -and (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { $alive = $true }
   if (-not $alive) { break }
   Start-Sleep -Milliseconds 500
 }
