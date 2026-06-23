@@ -27,7 +27,7 @@ export function HeroPanelPlaytime() {
 
   const isExtracting = extraction?.visibleId === game?.id;
   const isInstalling =
-    installer?.visibleId === game?.id && installer.status === "running";
+    installer?.visibleId === game?.id && installer?.status === "running";
 
   useEffect(() => {
     if (game?.lastTimePlayed) {

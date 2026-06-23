@@ -180,12 +180,34 @@ Start-Sleep -Milliseconds 1200
 while ($true) {
   if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
   Get-Process | Where-Object { $_.ProcessName -like 'QuickSFV*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+  # Neutralize host.cmd (the "Applying redirection rules" step) before InnoSetup
+  # runs it: it sits in the TEMP is-*.tmp folder from extraction until the final
+  # [Run], so overwrite it with a no-op -> no cmd window, no hosts entries added.
+  try {
+    Get-ChildItem -Path (Join-Path (Join-Path $env:TEMP 'is-*.tmp') 'host.cmd') -ErrorAction SilentlyContinue | ForEach-Object {
+      try { Set-Content -LiteralPath $_.FullName -Value '@echo off' -Encoding ASCII -ErrorAction SilentlyContinue } catch { }
+    }
+  } catch { }
   $alive = $false
   if ($proc) { try { if (-not $proc.HasExited) { $alive = $true } } catch { $alive = $false } }
   if (-not $alive -and (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { $alive = $true }
   if (-not $alive) { break }
   Start-Sleep -Milliseconds 500
 }
+
+# FitGirl's host.cmd runs last and adds "fake site" redirections to the Windows
+# hosts file (no effect on the game). Remove them once the installer is done -
+# killing it mid-run could corrupt the hosts file, so we clean up afterwards.
+try {
+  $hostsPath = [System.IO.Path]::Combine($env:WINDIR, 'System32', 'drivers', 'etc', 'hosts')
+  if (Test-Path -LiteralPath $hostsPath) {
+    $orig = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop)
+    $cleaned = @($orig | Where-Object { $_ -notmatch '(?i)fitgirl' })
+    if ($cleaned.Count -lt $orig.Count) {
+      Set-Content -LiteralPath $hostsPath -Value $cleaned -Encoding ASCII -ErrorAction Stop
+    }
+  }
+} catch { }
 
 $code = 1
 try { if ($proc -and $proc.HasExited) { $code = $proc.ExitCode } } catch { $code = 0 }
