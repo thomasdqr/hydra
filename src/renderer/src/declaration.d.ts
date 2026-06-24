@@ -309,6 +309,10 @@ declare global {
     removeGameFromLibrary: (shop: GameShop, objectId: string) => Promise<void>;
     removeGame: (shop: GameShop, objectId: string) => Promise<void>;
     deleteGameFolder: (shop: GameShop, objectId: string) => Promise<unknown>;
+    uninstallGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<{ ok: boolean; error?: string }>;
     getGameByObjectId: (
       shop: GameShop,
       objectId: string

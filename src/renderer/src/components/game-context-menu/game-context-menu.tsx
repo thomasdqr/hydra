@@ -57,7 +57,7 @@ export function GameContextMenu({
   const [searchParams] = useSearchParams();
   const [showConfirmRemoveLibrary, setShowConfirmRemoveLibrary] =
     useState(false);
-  const [showConfirmRemoveFiles, setShowConfirmRemoveFiles] = useState(false);
+  const [showConfirmUninstall, setShowConfirmUninstall] = useState(false);
   const [showCreateCollectionModal, setShowCreateCollectionModal] =
     useState(false);
   const [localCollectionIds, setLocalCollectionIds] = useState<string[]>(() =>
@@ -82,6 +82,7 @@ export function GameContextMenu({
   } = useGameCollections();
   const {
     canPlay,
+    canUninstall,
     isDeleting,
     isGameDownloading,
     isGameRunning,
@@ -97,7 +98,7 @@ export function GameContextMenu({
     handleOpenDownloadOptions,
     handleOpenDownloadLocation,
     handleRemoveFromLibrary,
-    handleRemoveFiles,
+    handleUninstall,
     handleOpenGameOptions,
     rpcs3ConfirmPending,
     handleConfirmRpcs3Launch,
@@ -366,6 +367,18 @@ export function GameContextMenu({
             ]
           : []),
 
+        ...(canUninstall
+          ? [
+              {
+                id: "uninstall",
+                label: t("uninstall"),
+                icon: <TrashIcon size={16} />,
+                onClick: () => setShowConfirmUninstall(true),
+                disabled: isDeleting || isGameRunning,
+                danger: true,
+              },
+            ]
+          : []),
         {
           id: "remove-library",
           label: t("remove_from_library"),
@@ -374,18 +387,6 @@ export function GameContextMenu({
           disabled: isDeleting,
           danger: true,
         },
-        ...(game.download?.downloadPath
-          ? [
-              {
-                id: "remove-files",
-                label: t("remove_files"),
-                icon: <TrashIcon size={16} />,
-                onClick: () => setShowConfirmRemoveFiles(true),
-                disabled: isDeleting || isGameDownloading,
-                danger: true,
-              },
-            ]
-          : []),
       ],
     },
     {
@@ -461,20 +462,20 @@ export function GameContextMenu({
       />
 
       <ConfirmationModal
-        visible={showConfirmRemoveFiles}
-        title={t("remove_files")}
-        descriptionText={t("delete_modal_description", { ns: "downloads" })}
+        visible={showConfirmUninstall}
+        title={t("uninstall")}
+        descriptionText={t("uninstall_description", { game: game.title })}
         onClose={() => {
-          setShowConfirmRemoveFiles(false);
+          setShowConfirmUninstall(false);
           onClose();
         }}
         onConfirm={async () => {
-          setShowConfirmRemoveFiles(false);
+          setShowConfirmUninstall(false);
           onClose();
-          await handleRemoveFiles();
+          await handleUninstall();
         }}
         cancelButtonLabel={t("cancel")}
-        confirmButtonLabel={t("remove")}
+        confirmButtonLabel={t("uninstall")}
       />
 
       <ConfirmationModal

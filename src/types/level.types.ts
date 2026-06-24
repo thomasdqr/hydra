@@ -59,6 +59,8 @@ export interface Game {
   protonPath?: string | null;
   executablePath?: string | null;
   executablePathUpdatedAt?: Date | null;
+  /** Root folder the game was silently installed to (holds the uninstaller). */
+  installFolder?: string | null;
   trackingExecutablePaths?: string[] | null;
   trackingExecutablePathsUpdatedAt?: Date | null;
   launchOptions?: string | null;

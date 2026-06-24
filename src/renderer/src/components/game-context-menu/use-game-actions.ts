@@ -40,6 +40,7 @@ export function useGameActions(game: LibraryGame) {
   const hasClassicsDiscs = (game.discs?.length ?? 0) > 0;
   const canPlay =
     Boolean(game.executablePath) || (isClassics && hasClassicsDiscs);
+  const canUninstall = !isClassics && Boolean(game.executablePath);
   const isDeleting = isGameDeleting(game.id);
   const isGameDownloading =
     game.download?.status === "active" && lastPacket?.gameId === game.id;
@@ -316,6 +317,42 @@ export function useGameActions(game: LibraryGame) {
     }
   };
 
+  const handleUninstall = async () => {
+    try {
+      const result = await window.electron.uninstallGame(
+        game.shop,
+        game.objectId
+      );
+
+      if (result.ok) {
+        updateLibrary();
+        showSuccessToast(t("uninstall_success"));
+        try {
+          window.dispatchEvent(
+            new CustomEvent("hydra:game-files-removed", {
+              detail: { shop: game.shop, objectId: game.objectId },
+            })
+          );
+        } catch (e) {
+          void e;
+        }
+        return;
+      }
+
+      // A declined UAC prompt leaves everything untouched; stay silent.
+      if (result.error === "cancelled") return;
+
+      showErrorToast(
+        result.error === "uninstaller_not_found"
+          ? t("uninstall_no_uninstaller")
+          : t("uninstall_failed")
+      );
+    } catch (error) {
+      showErrorToast(t("uninstall_failed"));
+      logger.error("Failed to uninstall game", error);
+    }
+  };
+
   const handleRemoveFiles = async () => {
     try {
       await removeGameInstaller(game.shop, game.objectId);
@@ -338,6 +375,7 @@ export function useGameActions(game: LibraryGame) {
 
   return {
     canPlay,
+    canUninstall,
     isDeleting,
     isGameDownloading,
     isGameRunning,
@@ -355,6 +393,7 @@ export function useGameActions(game: LibraryGame) {
     handleOpenDownloadLocation,
     handleRemoveFromLibrary,
     handleRemoveFiles,
+    handleUninstall,
     handleOpenGameOptions,
     handleConfirmRpcs3Launch,
     handleCancelRpcs3Launch,

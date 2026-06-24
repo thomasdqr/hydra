@@ -674,6 +674,8 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.invoke("removeGame", shop, objectId),
   deleteGameFolder: (shop: GameShop, objectId: string) =>
     ipcRenderer.invoke("deleteGameFolder", shop, objectId),
+  uninstallGame: (shop: GameShop, objectId: string) =>
+    ipcRenderer.invoke("uninstallGame", shop, objectId),
   getGameByObjectId: (shop: GameShop, objectId: string) =>
     ipcRenderer.invoke("getGameByObjectId", shop, objectId),
   resetGameAchievements: (shop: GameShop, objectId: string) =>

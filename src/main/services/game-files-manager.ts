@@ -222,6 +222,32 @@ if ($code -ne 0 -and $InstallDir -and (Test-Path -LiteralPath $InstallDir)) {
 exit $code
 `;
 
+// Runs a single Windows executable elevated (one UAC) and waits for it. Used to
+// run a game's InnoSetup uninstaller. A declined UAC resolves to 1223.
+const ELEVATED_RUN_SCRIPT = `
+param(
+  [Parameter(Mandatory = $true)][string]$Exe,
+  [string]$WorkDir = '',
+  [string]$ArgsB64 = ''
+)
+$ErrorActionPreference = 'Stop'
+$arguments = ''
+if ($ArgsB64) { $arguments = [System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($ArgsB64)) }
+try {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  if ($WorkDir) { $psi.WorkingDirectory = $WorkDir }
+  $psi.UseShellExecute = $true
+  $psi.Verb = 'runas'
+  if ($arguments) { $psi.Arguments = $arguments }
+  $proc = [System.Diagnostics.Process]::Start($psi)
+} catch {
+  exit 1223
+}
+$proc.WaitForExit()
+try { exit $proc.ExitCode } catch { exit 0 }
+`;
+
 export class GameFilesManager {
   private lastProgressUpdateTime = 0;
   private lastProgressUpdateValue = 0;
@@ -619,6 +645,8 @@ export class GameFilesManager {
         );
         this.sendInstallerProgress(1, "complete");
         await this.searchAndBindExecutableInPath(effectiveInstallPath);
+        await this.recordInstallFolder(effectiveInstallPath);
+        await this.deleteRepackFolder(extractedPath);
       } else {
         logger.error(
           `[GameFilesManager] Auto-install exited with code ${exitCode} for ${this.objectId}`
@@ -740,6 +768,199 @@ export class GameFilesManager {
       child.once("close", (code) => resolve(code ?? 1));
       child.once("error", reject);
     });
+  }
+
+  private async recordInstallFolder(installFolder: string) {
+    try {
+      const game = await gamesSublevel.get(this.gameKey);
+      if (game) {
+        await gamesSublevel.put(this.gameKey, { ...game, installFolder });
+      }
+    } catch {
+      // Non-fatal: the uninstaller can still be located from executablePath.
+    }
+  }
+
+  private async deleteRepackFolder(repackFolder: string) {
+    try {
+      if (!fs.existsSync(repackFolder)) return;
+      await fs.promises.rm(repackFolder, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 200,
+      });
+      logger.info(
+        `[GameFilesManager] Deleted repack source folder ${repackFolder}`
+      );
+    } catch (err) {
+      logger.error(
+        `[GameFilesManager] Failed to delete repack folder ${repackFolder}`,
+        err
+      );
+    }
+  }
+
+  private async findUninstaller(installFolder: string): Promise<string | null> {
+    try {
+      if (!fs.existsSync(installFolder)) return null;
+      const entries = await fs.promises.readdir(installFolder);
+      // InnoSetup names its uninstaller unins000.exe (unins001.exe, ...).
+      const uninstaller = entries.find((name) =>
+        /^unins\d{3}\.exe$/i.test(name)
+      );
+      return uninstaller ? path.join(installFolder, uninstaller) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async removeGameShortcuts(gameTitle: string) {
+    if (process.platform !== "win32") return;
+
+    const shortcutName =
+      removeSymbolsFromName(gameTitle).trim() || this.objectId;
+
+    const shortcutDirs = [
+      SystemPath.getPath("desktop"),
+      path.join(
+        SystemPath.getPath("appData"),
+        "Microsoft",
+        "Windows",
+        "Start Menu",
+        "Programs"
+      ),
+    ];
+
+    for (const dir of shortcutDirs) {
+      this.deleteShortcutIfExists(path.join(dir, `${shortcutName}.lnk`));
+      this.deleteShortcutIfExists(path.join(dir, `${shortcutName}.url`));
+    }
+  }
+
+  private runUninstaller(
+    uninstallerPath: string,
+    workDir: string
+  ): Promise<number> {
+    const args = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"];
+
+    return new Promise<number>((resolve, reject) => {
+      const child = spawn(uninstallerPath, args, {
+        cwd: workDir,
+        detached: false,
+        stdio: "ignore",
+      });
+      child.once("close", (code) => resolve(code ?? 1));
+      child.once("error", reject);
+    }).catch((error: NodeJS.ErrnoException) => {
+      // Uninstallers for per-machine installs need elevation (EACCES); relaunch
+      // through ShellExecute "runas" for a UAC prompt.
+      if (error.code === "EACCES") {
+        return this.spawnElevatedRunWindows(uninstallerPath, args, workDir);
+      }
+      throw error;
+    });
+  }
+
+  private spawnElevatedRunWindows(
+    exePath: string,
+    args: string[],
+    workDir: string
+  ): Promise<number> {
+    const script = ELEVATED_RUN_SCRIPT;
+    const scriptPath = path.join(app.getPath("temp"), "hydra-elevated-run.ps1");
+    const argsString = args
+      .map((arg) => (/\s/.test(arg) ? `"${arg}"` : arg))
+      .join(" ");
+    const argsB64 = Buffer.from(argsString, "utf16le").toString("base64");
+
+    return new Promise<number>((resolve, reject) => {
+      try {
+        fs.writeFileSync(scriptPath, script, "utf8");
+      } catch (error) {
+        reject(error as Error);
+        return;
+      }
+
+      const child = spawn(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          scriptPath,
+          "-Exe",
+          exePath,
+          "-WorkDir",
+          workDir,
+          "-ArgsB64",
+          argsB64,
+        ],
+        { detached: false, stdio: "ignore" }
+      );
+      child.once("close", (code) => resolve(code ?? 1));
+      child.once("error", reject);
+    });
+  }
+
+  /**
+   * Runs the game's official InnoSetup uninstaller and removes the shortcuts
+   * Hydra created. Returns ok=false (without touching anything) when no
+   * uninstaller is found or the UAC prompt is declined.
+   */
+  async uninstall(): Promise<{ ok: boolean; error?: string }> {
+    const game = await gamesSublevel.get(this.gameKey);
+    if (!game) return { ok: false, error: "game_not_found" };
+
+    // Prefer the recorded install folder; otherwise walk up from the bound
+    // executable (the uninstaller sits at the install root, the exe may nest).
+    const candidateFolders: string[] = [];
+    if (game.installFolder) candidateFolders.push(game.installFolder);
+    if (game.executablePath) {
+      let dir = path.dirname(game.executablePath);
+      for (let i = 0; i < 3; i++) {
+        candidateFolders.push(dir);
+        const parent = path.dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+    }
+
+    let uninstallerPath: string | null = null;
+    let installFolder = "";
+    for (const folder of candidateFolders) {
+      const found = await this.findUninstaller(folder);
+      if (found) {
+        uninstallerPath = found;
+        installFolder = folder;
+        break;
+      }
+    }
+
+    if (!uninstallerPath) return { ok: false, error: "uninstaller_not_found" };
+
+    logger.info(
+      `[GameFilesManager] Uninstalling ${this.objectId} via ${uninstallerPath}`
+    );
+
+    let exitCode: number;
+    try {
+      exitCode = await this.runUninstaller(uninstallerPath, installFolder);
+    } catch (err) {
+      logger.error(
+        `[GameFilesManager] Uninstaller failed for ${this.objectId}`,
+        err
+      );
+      return { ok: false, error: "uninstaller_failed" };
+    }
+
+    // 1223 = ERROR_CANCELLED (declined UAC) -> leave everything untouched.
+    if (exitCode === 1223) return { ok: false, error: "cancelled" };
+
+    await this.removeGameShortcuts(game.title);
+    return { ok: true };
   }
 
   private async searchAndBindExecutableInPath(
