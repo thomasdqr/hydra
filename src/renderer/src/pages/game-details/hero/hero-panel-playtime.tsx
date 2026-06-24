@@ -104,7 +104,11 @@ export function HeroPanelPlaytime() {
       <>
         <p>{t("not_played_yet", { title: game?.title })}</p>
         {isExtracting && extractionInProgressInfo}
-        {!isExtracting && hasDownload && downloadInProgressInfo}
+        {isInstalling && !isExtracting && installerInProgressInfo}
+        {!isExtracting &&
+          !isInstalling &&
+          hasDownload &&
+          downloadInProgressInfo}
       </>
     );
   }
@@ -151,8 +155,9 @@ export function HeroPanelPlaytime() {
       </p>
 
       {isExtracting && extractionInProgressInfo}
-      {!isExtracting && hasDownload && downloadInProgressInfo}
-      {!isExtracting && !hasDownload && (
+      {isInstalling && !isExtracting && installerInProgressInfo}
+      {!isExtracting && !isInstalling && hasDownload && downloadInProgressInfo}
+      {!isExtracting && !isInstalling && !hasDownload && (
         <p>
           {t("last_time_played", {
             period: lastTimePlayed,

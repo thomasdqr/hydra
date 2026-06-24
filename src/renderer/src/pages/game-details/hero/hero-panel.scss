@@ -81,7 +81,8 @@
       opacity: globals.$disabled-opacity;
     }
 
-    &--extraction {
+    &--extraction,
+    &--installer {
       &::-webkit-progress-value {
         background-color: #fff;
       }
