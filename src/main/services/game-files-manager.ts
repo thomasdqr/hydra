@@ -124,13 +124,130 @@ namespace HydraAudio {
   $muteReady = $true
 } catch { $muteReady = $false }
 
+# Win32 launcher: starts setup.exe via CreateProcess so we can place it (and every
+# child it spawns) on a private, non-interactive desktop. DeskProc wraps the process
+# handle with the small surface the script needs (HasExited/WaitForExit/ExitCode/
+# Kill/Close).
+$deskReady = $false
+try {
+  Add-Type -Language CSharp -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+namespace HydraLaunch {
+  public class DeskProc {
+    public int Pid; public IntPtr H;
+    public DeskProc(int pid, IntPtr h) { Pid = pid; H = h; }
+    [DllImport("kernel32.dll")] static extern uint WaitForSingleObject(IntPtr h, uint ms);
+    [DllImport("kernel32.dll")] static extern bool GetExitCodeProcess(IntPtr h, out uint code);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("kernel32.dll")] static extern bool TerminateProcess(IntPtr h, uint code);
+    public bool HasExited() { if (H == IntPtr.Zero) return true; return WaitForSingleObject(H, 0) == 0; }
+    public void WaitForExit() { if (H != IntPtr.Zero) WaitForSingleObject(H, 0xFFFFFFFF); }
+    public int ExitCode() { uint c; if (H != IntPtr.Zero && GetExitCodeProcess(H, out c)) return (int)c; return -1; }
+    public void Kill() { try { if (H != IntPtr.Zero) TerminateProcess(H, 1); } catch { } }
+    public void Close() { if (H != IntPtr.Zero) { CloseHandle(H); H = IntPtr.Zero; } }
+  }
+  public static class Launcher {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct STARTUPINFO {
+      public int cb; public string lpReserved; public string lpDesktop; public string lpTitle;
+      public int dwX; public int dwY; public int dwXSize; public int dwYSize; public int dwXCountChars;
+      public int dwYCountChars; public int dwFillAttribute; public int dwFlags; public short wShowWindow;
+      public short cbReserved2; public IntPtr lpReserved2; public IntPtr hStdInput; public IntPtr hStdOutput; public IntPtr hStdError;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct PROCESS_INFORMATION { public IntPtr hProcess; public IntPtr hThread; public int dwProcessId; public int dwThreadId; }
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool CreateProcess(string app, StringBuilder cmd, IntPtr pa, IntPtr ta, bool inherit, uint flags, IntPtr env, string dir, ref STARTUPINFO si, out PROCESS_INFORMATION pi);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr CreateDesktop(string name, string device, IntPtr devmode, uint flags, uint access, IntPtr sa);
+    [DllImport("user32.dll", SetLastError = true)] static extern bool CloseDesktop(IntPtr h);
+    [DllImport("Shlwapi.dll", CharSet = CharSet.Unicode)]
+    static extern uint AssocQueryString(int flags, int str, string assoc, string extra, StringBuilder outBuf, ref uint outLen);
+    public static IntPtr MakeDesktop(string name) { return CreateDesktop(name, null, IntPtr.Zero, 0, 0x10000000, IntPtr.Zero); }
+    public static void DropDesktop(IntPtr h) { if (h != IntPtr.Zero) CloseDesktop(h); }
+    // Resolves the executable that ShellExecute would launch for a URL scheme
+    // (e.g. "https") - i.e. the user's actual default browser - via the same
+    // association API the shell uses, so it works regardless of how the default
+    // is registered (UserChoice, ProgId, protocol key, ...). 2 = ASSOCSTR_EXECUTABLE.
+    public static string DefaultBrowserExe(string scheme) {
+      uint len = 1024; var sb = new StringBuilder((int)len);
+      if (AssocQueryString(0, 2, scheme, "open", sb, ref len) != 0) return "";
+      return sb.ToString();
+    }
+    static bool Try(string app, string cmd, string dir, string desktop, out PROCESS_INFORMATION pi) {
+      STARTUPINFO si = new STARTUPINFO();
+      si.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+      if (!string.IsNullOrEmpty(desktop)) si.lpDesktop = desktop;
+      StringBuilder sb = new StringBuilder(cmd);
+      return CreateProcess(app, sb, IntPtr.Zero, IntPtr.Zero, false, 0, IntPtr.Zero, dir, ref si, out pi);
+    }
+    public static DeskProc Start(string app, string cmd, string dir, string desktop) {
+      PROCESS_INFORMATION pi;
+      bool ok = Try(app, cmd, dir, desktop, out pi);
+      if (!ok && !string.IsNullOrEmpty(desktop)) ok = Try(app, cmd, dir, null, out pi);
+      if (!ok) throw new Exception("CreateProcess failed: " + Marshal.GetLastWin32Error());
+      if (pi.hThread != IntPtr.Zero) CloseHandle(pi.hThread);
+      return new DeskProc(pi.dwProcessId, pi.hProcess);
+    }
+  }
+}
+'@
+  $deskReady = $true
+} catch { $deskReady = $false }
+
+# Create a private, non-interactive desktop so NONE of the installer's windows ever
+# reach the user: the file-verification window, the InnoSetup GUI, the host.cmd
+# console, and the post-install browser the repack opens to the FitGirl site all
+# render on this invisible desktop (we never SwitchDesktop to it). Audio is muted
+# separately since sound is not desktop-bound. If creation fails we fall back to the
+# normal desktop and the other mitigations still apply.
+$deskName = ''
+$hDesk = [IntPtr]::Zero
+if ($deskReady) {
+  try {
+    $deskName = 'HydraInstall' + ([System.Guid]::NewGuid().ToString('N').Substring(0, 8))
+    $hDesk = [HydraLaunch.Launcher]::MakeDesktop($deskName)
+    if ($hDesk -eq [IntPtr]::Zero) { $deskName = '' }
+  } catch { $deskName = ''; $hDesk = [IntPtr]::Zero }
+}
+
 function Start-Setup([string]$arguments) {
-  $p = New-Object System.Diagnostics.ProcessStartInfo
-  $p.FileName = $Exe
-  $p.WorkingDirectory = $workDir
-  $p.UseShellExecute = $false
-  $p.Arguments = $arguments
-  return [System.Diagnostics.Process]::Start($p)
+  $cmd = '"' + $Exe + '" ' + $arguments
+  if ($deskReady) {
+    return [HydraLaunch.Launcher]::Start($Exe, $cmd, $workDir, $deskName)
+  }
+  # Fallback: launcher type unavailable -> wrap a .NET process to the same shape.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $Exe
+  $psi.WorkingDirectory = $workDir
+  $psi.UseShellExecute = $false
+  $psi.Arguments = $arguments
+  $netProc = [System.Diagnostics.Process]::Start($psi)
+  return [PSCustomObject]@{ NetProc = $netProc } |
+    Add-Member -PassThru -MemberType ScriptMethod -Name HasExited -Value { $this.NetProc.HasExited } |
+    Add-Member -PassThru -MemberType ScriptMethod -Name WaitForExit -Value { $this.NetProc.WaitForExit() } |
+    Add-Member -PassThru -MemberType ScriptMethod -Name ExitCode -Value { try { $this.NetProc.ExitCode } catch { -1 } } |
+    Add-Member -PassThru -MemberType ScriptMethod -Name Kill -Value { try { $this.NetProc.Kill() } catch { } } |
+    Add-Member -PassThru -MemberType ScriptMethod -Name Close -Value { try { $this.NetProc.Dispose() } catch { } }
+}
+
+# Backup that closes any browser the installer opens to the FitGirl site, matched by
+# the URL in its command line so the user's own windows are left untouched. The browser
+# is already blocked deterministically by the URL-association repoint below; this only
+# catches a stray launch if that ever misses. IMPORTANT: it must NOT delete anything
+# from the is-*.tmp folder - FitGirl's installer integrity-checks those support files
+# and aborts the whole install (exit 1, nothing decompressed) if any go missing. The
+# host.cmd console and the verification window are hidden by the private desktop instead,
+# and host.cmd's hosts-file edits are reverted after the install.
+function Invoke-SuppressFitGirlPayload {
+  try {
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -match '(?i)^(msedge|chrome|firefox|brave|opera|vivaldi|iexplore)' -and $_.CommandLine -match '(?i)fitgirl' } |
+      ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { } }
+  } catch { }
 }
 
 # Pass 1: discover the repack's selected components via /SAVEINF (written before
@@ -142,13 +259,14 @@ try {
   if (Test-Path -LiteralPath $infFile) { Remove-Item -LiteralPath $infFile -Force }
   $probeDir = [System.IO.Path]::Combine($env:TEMP, 'hydra-probe')
   $probe = Start-Setup ('/VERYSILENT /SUPPRESSMSGBOXES "/DIR=' + $probeDir + '" /NORESTART /SP- "/SAVEINF=' + $infFile + '"')
-  for ($i = 0; $i -lt 60; $i++) {
+  for ($i = 0; $i -lt 300; $i++) {
     if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+    Invoke-SuppressFitGirlPayload
     if (Test-Path -LiteralPath $infFile) { break }
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 100
   }
   Start-Sleep -Milliseconds 300
-  try { if ($probe -and -not $probe.HasExited) { $probe.Kill() } } catch { }
+  try { if ($probe -and -not $probe.HasExited()) { $probe.Kill() } } catch { }
   # Kill the loader AND the extracted "setup.tmp" engine, then wait until both
   # are gone so the probe's music can't bleed into the real install.
   Get-Process | Where-Object { $_.ProcessName -like 'setup*' } | Stop-Process -Force -ErrorAction SilentlyContinue
@@ -156,6 +274,7 @@ try {
     if (-not (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { break }
     Start-Sleep -Milliseconds 250
   }
+  try { if ($probe) { $probe.Close() } } catch { }
   if (Test-Path -LiteralPath $infFile) {
     $line = (Get-Content -LiteralPath $infFile | Where-Object { $_ -match '^Components=' } | Select-Object -First 1)
     if ($line) {
@@ -167,58 +286,128 @@ try {
   try { if (Test-Path -LiteralPath $probeDir) { Remove-Item -LiteralPath $probeDir -Recurse -Force } } catch { }
 } catch { $components = '' }
 
-# Pass 2: real install (game-only components) while muting setup's audio and
-# killing the file verifier (QuickSFV) as soon as it spawns.
+# Deterministically blocks the post-install browser pop-up: FitGirl's installer opens
+# https://bit.ly/fitgirl-repacks-site via ShellExecute. The hidden desktop only hides a
+# freshly launched browser - when one is already running, the URL is handed to that
+# instance on the user's real desktop, so a tab still appears. Repointing the registered
+# URL handler proved unreliable (modern Windows resolves the default browser through an
+# association API, not the classic protocol key). So instead, for the duration of the
+# install, we set an Image File Execution Options "Debugger" on the default browser's
+# executable: Windows then intercepts every NEW launch of that exe and runs a no-op
+# instead, so the installer's ShellExecute opens nothing - regardless of how the default
+# browser is registered. The already-running browser is untouched (IFEO only affects new
+# launches), and it is fully restored the moment the install ends. We cover the resolved
+# default browser plus the common browser executables as a safety net.
+$BS = [string][char]92
+$ifeoRestore = New-Object System.Collections.ArrayList
+function Disable-UrlOpen {
+  $ErrorActionPreference = 'SilentlyContinue'
+  $noop = '"' + [System.IO.Path]::Combine($env:SystemRoot, 'System32', 'cmd.exe') + '" /c exit'
+  $ifeoBase = 'HKLM:' + $BS + 'SOFTWARE' + $BS + 'Microsoft' + $BS + 'Windows NT' + $BS + 'CurrentVersion' + $BS + 'Image File Execution Options'
+  $exes = New-Object System.Collections.Generic.HashSet[string]
+  foreach ($scheme in @('https', 'http')) {
+    try {
+      $p = [HydraLaunch.Launcher]::DefaultBrowserExe($scheme)
+      if ($p) { $name = [System.IO.Path]::GetFileName($p); if ($name) { [void]$exes.Add($name.ToLower()) } }
+    } catch { }
+  }
+  foreach ($name in @('msedge.exe', 'chrome.exe', 'firefox.exe', 'brave.exe', 'opera.exe', 'vivaldi.exe', 'zen.exe', 'iexplore.exe', 'librewolf.exe')) {
+    [void]$exes.Add($name)
+  }
+  foreach ($exe in $exes) {
+    try {
+      $key = $ifeoBase + $BS + $exe
+      $existed = Test-Path -LiteralPath $key
+      $origDbg = $null
+      if ($existed) { $origDbg = (Get-ItemProperty -LiteralPath $key -ErrorAction SilentlyContinue).Debugger }
+      New-Item -Path $key -Force -ErrorAction SilentlyContinue | Out-Null
+      Set-ItemProperty -LiteralPath $key -Name 'Debugger' -Value $noop -ErrorAction SilentlyContinue
+      [void]$ifeoRestore.Add([PSCustomObject]@{ Key = $key; Existed = $existed; OrigDbg = $origDbg })
+    } catch { }
+  }
+}
+function Restore-UrlOpen {
+  $ErrorActionPreference = 'SilentlyContinue'
+  foreach ($r in $ifeoRestore) {
+    try {
+      if ($r.Existed) {
+        if ($null -ne $r.OrigDbg) { Set-ItemProperty -LiteralPath $r.Key -Name 'Debugger' -Value $r.OrigDbg }
+        else { Remove-ItemProperty -LiteralPath $r.Key -Name 'Debugger' -ErrorAction SilentlyContinue }
+      } else {
+        Remove-Item -LiteralPath $r.Key -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    } catch { }
+  }
+}
+
+# Pass 2: real install (game-only components) while muting setup's audio, killing the
+# file verifier (QuickSFV), and neutralizing FitGirl's post-install payload (host.cmd
+# hosts-redirection step + the "thank you" browser pop-up). Everything from here is in
+# try/finally so the browser association and the private desktop are always restored.
 $installArgs = $baseArgs
 if ($components) { $installArgs = $installArgs + ' "/COMPONENTS=' + $components + '"' }
 
-$proc = $null
-try { $proc = Start-Setup $installArgs } catch { exit 1 }
-
-Start-Sleep -Milliseconds 1200
-while ($true) {
-  if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
-  Get-Process | Where-Object { $_.ProcessName -like 'QuickSFV*' } | Stop-Process -Force -ErrorAction SilentlyContinue
-  # Neutralize host.cmd (the "Applying redirection rules" step) before InnoSetup
-  # runs it: it sits in the TEMP is-*.tmp folder from extraction until the final
-  # [Run], so overwrite it with a no-op -> no cmd window, no hosts entries added.
-  try {
-    Get-ChildItem -Path (Join-Path (Join-Path $env:TEMP 'is-*.tmp') 'host.cmd') -ErrorAction SilentlyContinue | ForEach-Object {
-      try { Set-Content -LiteralPath $_.FullName -Value '@echo off' -Encoding ASCII -ErrorAction SilentlyContinue } catch { }
-    }
-  } catch { }
-  $alive = $false
-  if ($proc) { try { if (-not $proc.HasExited) { $alive = $true } } catch { $alive = $false } }
-  if (-not $alive -and (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { $alive = $true }
-  if (-not $alive) { break }
-  Start-Sleep -Milliseconds 500
-}
-
-# FitGirl's host.cmd runs last and adds "fake site" redirections to the Windows
-# hosts file (no effect on the game). Remove them once the installer is done -
-# killing it mid-run could corrupt the hosts file, so we clean up afterwards.
-try {
-  $hostsPath = [System.IO.Path]::Combine($env:WINDIR, 'System32', 'drivers', 'etc', 'hosts')
-  if (Test-Path -LiteralPath $hostsPath) {
-    $orig = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop)
-    $cleaned = @($orig | Where-Object { $_ -notmatch '(?i)fitgirl' })
-    if ($cleaned.Count -lt $orig.Count) {
-      Set-Content -LiteralPath $hostsPath -Value $cleaned -Encoding ASCII -ErrorAction Stop
-    }
-  }
-} catch { }
-
 $code = 1
-try { if ($proc -and $proc.HasExited) { $code = $proc.ExitCode } } catch { $code = 0 }
+Disable-UrlOpen
+try {
+  $proc = $null
+  try { $proc = Start-Setup $installArgs } catch { $proc = $null }
 
-# A relaunched installer can exit non-zero while the real install (in a child)
-# succeeds, so treat a populated target dir as success.
-if ($code -ne 0 -and $InstallDir -and (Test-Path -LiteralPath $InstallDir)) {
+  # Tight opening burst: mute the music and delete the payload every 50ms so the
+  # sound is silenced within a few frames (no audible "split second" at the start).
+  for ($b = 0; $b -lt 24; $b++) {
+    if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+    Invoke-SuppressFitGirlPayload
+    Start-Sleep -Milliseconds 50
+  }
+  while ($true) {
+    if ($muteReady) { try { [HydraAudio.Mixer]::MuteByProcessName($ProcessName) } catch { } }
+    Get-Process | Where-Object { $_.ProcessName -like 'QuickSFV*' } | Stop-Process -Force -ErrorAction SilentlyContinue
+    Invoke-SuppressFitGirlPayload
+    $alive = $false
+    if ($proc) { try { if (-not $proc.HasExited()) { $alive = $true } } catch { $alive = $false } }
+    if (-not $alive -and (Get-Process | Where-Object { $_.ProcessName -like 'setup*' })) { $alive = $true }
+    if (-not $alive) { break }
+    Start-Sleep -Milliseconds 500
+  }
+
+  # Keep sweeping briefly after the installer is gone so a last-moment payload or
+  # browser launch (if the association block ever misses) doesn't slip through.
+  for ($s = 0; $s -lt 12; $s++) {
+    Invoke-SuppressFitGirlPayload
+    Start-Sleep -Milliseconds 250
+  }
+
+  # Safety net: if host.cmd still managed to run (e.g. a very fast install beat the
+  # deletion), strip the "fake site" FitGirl redirections it adds to the hosts file.
   try {
-    $sz = (Get-ChildItem -LiteralPath $InstallDir -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
-    if ($sz -gt 52428800) { $code = 0 }
+    $hostsPath = [System.IO.Path]::Combine($env:WINDIR, 'System32', 'drivers', 'etc', 'hosts')
+    if (Test-Path -LiteralPath $hostsPath) {
+      $orig = @(Get-Content -LiteralPath $hostsPath -ErrorAction Stop)
+      $cleaned = @($orig | Where-Object { $_ -notmatch '(?i)fitgirl' })
+      if ($cleaned.Count -lt $orig.Count) {
+        Set-Content -LiteralPath $hostsPath -Value $cleaned -Encoding ASCII -ErrorAction Stop
+      }
+    }
   } catch { }
+
+  try { if ($proc -and $proc.HasExited()) { $code = $proc.ExitCode() } } catch { $code = 0 }
+  try { if ($proc) { $proc.Close() } } catch { }
+
+  # A relaunched installer can exit non-zero while the real install (in a child)
+  # succeeds, so treat a populated target dir as success.
+  if ($code -ne 0 -and $InstallDir -and (Test-Path -LiteralPath $InstallDir)) {
+    try {
+      $sz = (Get-ChildItem -LiteralPath $InstallDir -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+      if ($sz -gt 52428800) { $code = 0 }
+    } catch { }
+  }
+} finally {
+  # Always restore the browser association and tear down the private desktop.
+  Restore-UrlOpen
+  try { if ($hDesk -ne [IntPtr]::Zero) { [HydraLaunch.Launcher]::DropDesktop($hDesk) } } catch { }
 }
+
 exit $code
 `;
 
@@ -557,14 +746,17 @@ export class GameFilesManager {
         (await gamesSublevel.get(this.gameKey))?.title ?? this.objectId
       ).trim() || this.objectId;
 
-    let effectiveInstallPath =
+    // Always install into a per-game subfolder named after the title - including
+    // when the user picks a custom install path. Installing several games straight
+    // into one shared folder is unsafe: the game's own InnoSetup uninstaller deletes
+    // its whole install directory, so uninstalling one game would wipe that shared
+    // folder and every other game in it.
+    const installBase =
       installPath ??
-      path.join(
-        process.platform === "win32"
-          ? "C:\\Program Files"
-          : path.join(process.env.HOME ?? "/home/user", "Games"),
-        cleanTitle
-      );
+      (process.platform === "win32"
+        ? "C:\\Program Files"
+        : path.join(process.env.HOME ?? "/home/user", "Games"));
+    let effectiveInstallPath = path.join(installBase, cleanTitle);
 
     // Never install into the repack's own folder: it holds setup.exe and the
     // .bin data files, and InnoSetup refuses to install into its source dir
@@ -646,7 +838,10 @@ export class GameFilesManager {
         this.sendInstallerProgress(1, "complete");
         await this.searchAndBindExecutableInPath(effectiveInstallPath);
         await this.recordInstallFolder(effectiveInstallPath);
-        await this.deleteRepackFolder(extractedPath);
+        await this.deleteRepackFolder(
+          extractedPath,
+          download?.downloadPath ?? null
+        );
       } else {
         logger.error(
           `[GameFilesManager] Auto-install exited with code ${exitCode} for ${this.objectId}`
@@ -667,13 +862,16 @@ export class GameFilesManager {
     setupExePath: string,
     installPath: string
   ): Promise<number> {
-    // InnoSetup silent flags: completely silent, no message boxes, set dir, no restart
+    // InnoSetup silent flags: completely silent, no message boxes, set dir, no
+    // restart. /MERGETASKS=!desktopicon deselects the installer's "create a
+    // desktop shortcut" task so the repack doesn't litter the desktop.
     const innoArgs = (dir: string) => [
       "/VERYSILENT",
       "/SUPPRESSMSGBOXES",
       `/DIR=${dir}`,
       "/NORESTART",
       "/SP-",
+      "/MERGETASKS=!desktopicon",
     ];
 
     if (process.platform === "win32") {
@@ -781,9 +979,50 @@ export class GameFilesManager {
     }
   }
 
-  private async deleteRepackFolder(repackFolder: string) {
+  // True when deleting `target` would also remove the download-location root
+  // (the user's "download path") or one of its ancestors / a drive root. We must
+  // never recursively delete those: the download folder holds the user's other
+  // downloads, and the parent should always survive a cleanup/uninstall.
+  private isProtectedDeletionTarget(
+    target: string,
+    downloadRoot: string | null
+  ): boolean {
+    const resolvedTarget = path.resolve(target);
+
+    // A filesystem/drive root (its own parent).
+    if (path.dirname(resolvedTarget) === resolvedTarget) return true;
+
+    if (downloadRoot) {
+      const root = path.resolve(downloadRoot);
+      if (resolvedTarget === root) return true;
+
+      // If the download root is inside the target, the target is an ancestor of
+      // it - deleting the target would take the download location with it.
+      const rootRelativeToTarget = path.relative(resolvedTarget, root);
+      if (
+        rootRelativeToTarget !== "" &&
+        !rootRelativeToTarget.startsWith("..") &&
+        !path.isAbsolute(rootRelativeToTarget)
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private async deleteRepackFolder(
+    repackFolder: string,
+    downloadRoot: string | null
+  ) {
     try {
       if (!fs.existsSync(repackFolder)) return;
+      if (this.isProtectedDeletionTarget(repackFolder, downloadRoot)) {
+        logger.warn(
+          `[GameFilesManager] Skipping repack cleanup of ${repackFolder}: it is the download-location root (keeping it)`
+        );
+        return;
+      }
       await fs.promises.rm(repackFolder, {
         recursive: true,
         force: true,
@@ -941,6 +1180,42 @@ export class GameFilesManager {
 
     if (!uninstallerPath) return { ok: false, error: "uninstaller_not_found" };
 
+    // Safety: never let the uninstaller run against the download-location root (or an
+    // ancestor / drive root). The official uninstaller deletes its whole install
+    // directory, so this would wipe the user's download folder and everything in it.
+    const download = await downloadsSublevel.get(this.gameKey);
+    if (
+      this.isProtectedDeletionTarget(
+        installFolder,
+        download?.downloadPath ?? null
+      )
+    ) {
+      logger.warn(
+        `[GameFilesManager] Refusing to uninstall ${this.objectId}: ${installFolder} is the download-location root`
+      );
+      return { ok: false, error: "uninstaller_shared_folder" };
+    }
+
+    // Safety: refuse if the install folder holds more than one InnoSetup uninstaller
+    // (unins000.exe, unins001.exe, ...). That means several games were installed into
+    // the same folder; the official uninstaller deletes its whole install directory,
+    // so running it would wipe the sibling games too. New installs use a per-game
+    // subfolder to avoid this - this guards games installed before that fix.
+    try {
+      const entries = await fs.promises.readdir(installFolder);
+      const uninstallerCount = entries.filter((name) =>
+        /^unins\d{3}\.exe$/i.test(name)
+      ).length;
+      if (uninstallerCount > 1) {
+        logger.warn(
+          `[GameFilesManager] Refusing to uninstall ${this.objectId}: ${installFolder} is shared by multiple games`
+        );
+        return { ok: false, error: "uninstaller_shared_folder" };
+      }
+    } catch {
+      // If the folder can't be read, fall through and let the uninstaller decide.
+    }
+
     logger.info(
       `[GameFilesManager] Uninstalling ${this.objectId} via ${uninstallerPath}`
     );
@@ -1001,7 +1276,10 @@ export class GameFilesManager {
         });
 
         WindowManager.sendToAppWindows("on-library-batch-complete");
-        await this.createDesktopShortcutForGame(game.title);
+        // Auto-install is meant to be clean: the game is launchable from the
+        // Hydra library, so skip the desktop shortcut (Start Menu is still
+        // created, gated by the user's preference).
+        await this.createDesktopShortcutForGame(game.title, { desktop: false });
       } else {
         logger.info(
           `[GameFilesManager] No game exe found in install path ${installPath} for ${this.objectId}`
@@ -1397,8 +1675,12 @@ export class GameFilesManager {
     );
   }
 
-  private async createDesktopShortcutForGame(gameTitle: string): Promise<void> {
+  private async createDesktopShortcutForGame(
+    gameTitle: string,
+    shortcutOptions?: { desktop?: boolean }
+  ): Promise<void> {
     try {
+      const createDesktop = shortcutOptions?.desktop !== false;
       const shortcutName =
         removeSymbolsFromName(gameTitle).trim() || this.objectId;
       const deepLink = this.buildRunDeepLink();
@@ -1418,17 +1700,19 @@ export class GameFilesManager {
           return;
         }
 
-        const desktopSuccess = this.createWindowsShortcut(
-          shortcutName,
-          SystemPath.getPath("desktop"),
-          deepLink,
-          iconPath
-        );
-
-        if (desktopSuccess) {
-          logger.info(
-            `[GameFilesManager] Created desktop shortcut for ${this.objectId}`
+        if (createDesktop) {
+          const desktopSuccess = this.createWindowsShortcut(
+            shortcutName,
+            SystemPath.getPath("desktop"),
+            deepLink,
+            iconPath
           );
+
+          if (desktopSuccess) {
+            logger.info(
+              `[GameFilesManager] Created desktop shortcut for ${this.objectId}`
+            );
+          }
         }
 
         const startMenuPath = path.join(

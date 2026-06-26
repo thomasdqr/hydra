@@ -488,6 +488,11 @@ export function GameOptionsModal({
       // A declined UAC prompt leaves everything untouched; stay silent.
       if (result.error === "cancelled") return;
 
+      if (result.error === "uninstaller_shared_folder") {
+        showErrorToast(t("uninstall_shared_folder"));
+        return;
+      }
+
       showErrorToast(
         result.error === "uninstaller_not_found"
           ? t("uninstall_no_uninstaller")

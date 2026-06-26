@@ -272,6 +272,7 @@
     "uninstall_success": "Jeu désinstallé",
     "uninstall_failed": "Impossible de désinstaller le jeu",
     "uninstall_no_uninstaller": "Aucun désinstalleur trouvé pour ce jeu",
+    "uninstall_shared_folder": "Ce jeu partage son dossier avec d'autres jeux. Désinstallez-le manuellement pour ne pas supprimer les autres.",
     "remove_from_library_title": "Êtes-vous sûr ?",
     "remove_from_library_description": "Ceci supprimera {{game}} de votre bibliothèque",
     "options": "Options",
@@ -678,7 +679,7 @@
     "auto_install_after_extraction": "Installation automatique après extraction (repacks FitGirl / InnoSetup)",
     "install_path": "Dossier d'installation",
     "install_path_placeholder": "Laisser vide pour utiliser l'emplacement par défaut",
-    "install_path_hint": "Le jeu sera installé silencieusement dans ce dossier. Laisser vide pour utiliser l'emplacement par défaut."
+    "install_path_hint": "Chaque jeu est installé silencieusement dans son propre sous-dossier ici. Laisser vide pour utiliser l'emplacement par défaut."
   },
   "activation": {
     "title": "Activer Hydra",
