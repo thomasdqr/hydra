@@ -267,6 +267,12 @@
     "create_shortcut": "Créer un raccourci sur le bureau",
     "clear": "Effacer",
     "remove_files": "Supprimer les fichiers",
+    "uninstall": "Désinstaller",
+    "uninstall_description": "{{game}} sera désinstallé via son désinstalleur officiel et le raccourci Hydra sera supprimé. Le jeu reste dans votre bibliothèque pour une réinstallation ultérieure.",
+    "uninstall_success": "Jeu désinstallé",
+    "uninstall_failed": "Impossible de désinstaller le jeu",
+    "uninstall_no_uninstaller": "Aucun désinstalleur trouvé pour ce jeu",
+    "uninstall_shared_folder": "Ce jeu partage son dossier avec d'autres jeux. Désinstallez-le manuellement pour ne pas supprimer les autres.",
     "remove_from_library_title": "Êtes-vous sûr ?",
     "remove_from_library_description": "Ceci supprimera {{game}} de votre bibliothèque",
     "options": "Options",
@@ -352,6 +358,7 @@
     "create_shortcut_simple": "Créer un raccourci",
     "properties": "Propriétés",
     "extracting": "Extraction en cours",
+    "installing": "Installation en cours",
     "new_download_option": "Nouveau",
     "create_steam_shortcut": "Créer un raccourci Steam",
     "you_might_need_to_restart_steam": "Vous devrez peut-être redémarrer Steam pour voir les changements",
@@ -668,7 +675,11 @@
     "controller_support_partial_description": "Certains menus peuvent nécessiter un clavier et une souris.",
     "controller_support_none_label": "Pas de support officiel",
     "controller_support_xbox_label": "Manette Xbox",
-    "controller_support_playstation_label": "Manette PlayStation"
+    "controller_support_playstation_label": "Manette PlayStation",
+    "auto_install_after_extraction": "Installation automatique après extraction (repacks FitGirl / InnoSetup)",
+    "install_path": "Dossier d'installation",
+    "install_path_placeholder": "Laisser vide pour utiliser l'emplacement par défaut",
+    "install_path_hint": "Chaque jeu est installé silencieusement dans son propre sous-dossier ici. Laisser vide pour utiliser l'emplacement par défaut."
   },
   "activation": {
     "title": "Activer Hydra",
@@ -722,7 +733,10 @@
     "move_down": "Déplacer vers le bas",
     "files": "FICHIERS",
     "extraction_failed_title": "Échec de l'extraction",
-    "extraction_failed_description": "Hydra n'a pas pu extraire cette archive. Vérifiez l'intégrité de l'archive ou l'espace disque, puis réessayez."
+    "extraction_failed_description": "Hydra n'a pas pu extraire cette archive. Vérifiez l'intégrité de l'archive ou l'espace disque, puis réessayez.",
+    "installing": "Installation en cours…",
+    "installer_failed_title": "Échec de l'installation",
+    "installer_failed_description": "L'installateur s'est arrêté avec une erreur. Vérifiez l'espace disque et essayez de le lancer manuellement."
   },
   "settings": {
     "downloads_path": "Chemin des téléchargements",

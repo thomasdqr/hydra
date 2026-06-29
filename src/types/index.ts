@@ -146,6 +146,8 @@ export interface StartGameDownloadPayload {
   fileSize?: string | null;
   fileIndices?: number[];
   selectedFilesSize?: number | null;
+  autoInstallAfterExtraction?: boolean;
+  installPath?: string | null;
 }
 
 export interface UserFriend {

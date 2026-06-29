@@ -1,5 +1,6 @@
 import { registerEvent } from "../register-event";
 import { GameShop } from "@types";
+import fs from "node:fs";
 import path from "node:path";
 import { DownloadManager, GameFilesManager, logger } from "@main/services";
 import { downloadsSublevel, gamesSublevel, levelKeys } from "@main/level";
@@ -55,10 +56,16 @@ const extractGameDownload = async (
       });
     }
 
+    // folderName may point at a loose data file inside the repack folder
+    // (e.g. FitGirl: "<repack>/fg-01.bin"); extract from the containing folder.
+    const downloadTarget = path.join(download.downloadPath, targetFolderName);
+    const extractionDir =
+      fs.existsSync(downloadTarget) && fs.statSync(downloadTarget).isFile()
+        ? path.dirname(downloadTarget)
+        : downloadTarget;
+
     return gameFilesManager
-      .extractFilesInDirectory(
-        path.join(download.downloadPath, targetFolderName)
-      )
+      .extractFilesInDirectory(extractionDir)
       .then((success) => {
         if (success) {
           return gameFilesManager.setExtractionComplete(false).catch(() => {

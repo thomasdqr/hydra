@@ -249,6 +249,7 @@ interface HeroDownloadViewProps {
   game: LibraryGame;
   isGameDownloading: boolean;
   isGameExtracting?: boolean;
+  isGameInstalling?: boolean;
   downloadSpeed: number;
   finalDownloadSize: string;
   peakSpeed: number;
@@ -268,6 +269,7 @@ function HeroDownloadView({
   game,
   isGameDownloading,
   isGameExtracting = false,
+  isGameInstalling = false,
   downloadSpeed,
   finalDownloadSize,
   peakSpeed,
@@ -346,19 +348,28 @@ function HeroDownloadView({
                     {t("extracting")}
                   </span>
                 )}
-                {!isGameExtracting && lastPacket?.isCheckingFiles && (
+                {isGameInstalling && !isGameExtracting && (
                   <span className="download-group__progress-status">
-                    {t("checking_files")}
+                    {t("installing")}
                   </span>
                 )}
-                {!isGameExtracting && !lastPacket?.isCheckingFiles && (
-                  <span className="download-group__progress-size">
-                    <DownloadIcon size={14} />
-                    {isGameDownloading && lastPacket
-                      ? `${formatBytes(lastPacket.download.bytesDownloaded)} / ${finalDownloadSize}`
-                      : `${formatBytes(game.download?.bytesDownloaded ?? 0)} / ${finalDownloadSize}`}
-                  </span>
-                )}
+                {!isGameExtracting &&
+                  !isGameInstalling &&
+                  lastPacket?.isCheckingFiles && (
+                    <span className="download-group__progress-status">
+                      {t("checking_files")}
+                    </span>
+                  )}
+                {!isGameExtracting &&
+                  !isGameInstalling &&
+                  !lastPacket?.isCheckingFiles && (
+                    <span className="download-group__progress-size">
+                      <DownloadIcon size={14} />
+                      {isGameDownloading && lastPacket
+                        ? `${formatBytes(lastPacket.download.bytesDownloaded)} / ${finalDownloadSize}`
+                        : `${formatBytes(game.download?.bytesDownloaded ?? 0)} / ${finalDownloadSize}`}
+                    </span>
+                  )}
                 <span></span>
               </div>
               <div className="download-group__progress-info-row">
@@ -535,6 +546,7 @@ export function DownloadGroup({
   );
 
   const extraction = useAppSelector((state) => state.download.extraction);
+  const installer = useAppSelector((state) => state.download.installer);
 
   const { updateLibrary } = useLibrary();
 
@@ -958,8 +970,10 @@ export function DownloadGroup({
   if (isDownloadingGroup && library.length > 0) {
     const game = library[0];
     const isGameExtracting = extraction?.visibleId === game.id;
+    const isGameInstalling =
+      installer?.visibleId === game.id && installer?.status === "running";
     const isGameDownloading =
-      isGameDownloadingMap[game.id] && !isGameExtracting;
+      isGameDownloadingMap[game.id] && !isGameExtracting && !isGameInstalling;
     const downloadSpeed = isGameDownloading
       ? (lastPacket?.downloadSpeed ?? 0)
       : 0;
@@ -976,6 +990,8 @@ export function DownloadGroup({
     let currentProgress = game.download?.progress || 0;
     if (isGameExtracting) {
       currentProgress = extraction.progress;
+    } else if (isGameInstalling) {
+      currentProgress = installer.progress;
     } else if (isGameDownloading && lastPacket) {
       currentProgress = lastPacket.progress;
     }
@@ -997,6 +1013,7 @@ export function DownloadGroup({
           game={game}
           isGameDownloading={isGameDownloading}
           isGameExtracting={isGameExtracting}
+          isGameInstalling={isGameInstalling}
           downloadSpeed={downloadSpeed}
           finalDownloadSize={finalDownloadSize}
           peakSpeed={peakSpeed}
@@ -1069,6 +1086,12 @@ export function DownloadGroup({
                         <span className="download-group__simple-extracting">
                           {t("extracting")} (
                           {Math.round(extraction.progress * 100)}%)
+                        </span>
+                      ) : installer?.visibleId === game.id &&
+                        installer.status === "running" ? (
+                        <span className="download-group__simple-extracting">
+                          {t("installing")} (
+                          {Math.round(installer.progress * 100)}%)
                         </span>
                       ) : (
                         <span className="download-group__simple-size">

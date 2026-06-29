@@ -12,6 +12,7 @@ import "./create-steam-shortcut";
 import "./delete-archive";
 import "./delete-game-folder";
 import "./extract-game-download";
+import "./uninstall-game";
 import "./get-default-wine-prefix-selection-path";
 import "./get-installed-proton-versions";
 import "./is-gamemode-available";

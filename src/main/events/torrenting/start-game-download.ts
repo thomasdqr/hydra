@@ -29,6 +29,8 @@ const startGameDownload = async (
     automaticallyDeleteArchiveFiles,
     fileIndices,
     selectedFilesSize,
+    autoInstallAfterExtraction,
+    installPath,
   } = payload;
 
   const gameKey = levelKeys.game(shop, objectId);
@@ -57,6 +59,8 @@ const startGameDownload = async (
     fileIndices,
     selectedFilesSize,
     fileSize: selectedFilesSize ?? null,
+    autoInstallAfterExtraction: autoInstallAfterExtraction ?? false,
+    installPath: installPath ?? null,
   };
 
   try {

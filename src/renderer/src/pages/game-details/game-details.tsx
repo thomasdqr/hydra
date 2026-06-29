@@ -106,7 +106,9 @@ export default function GameDetails() {
             fileIndices?: number[],
             selectedFilesSize?: number | null,
             automaticallyDeleteArchiveFiles = false,
-            signal?: AbortSignal
+            signal?: AbortSignal,
+            autoInstallAfterExtraction?: boolean,
+            installPath?: string | null
           ) => {
             const response = addToQueueOnly
               ? await addGameToQueue(
@@ -122,6 +124,8 @@ export default function GameDetails() {
                     fileSize: repack.fileSize,
                     fileIndices,
                     selectedFilesSize,
+                    autoInstallAfterExtraction,
+                    installPath,
                   },
                   signal
                 )
@@ -138,6 +142,8 @@ export default function GameDetails() {
                     fileSize: repack.fileSize,
                     fileIndices,
                     selectedFilesSize,
+                    autoInstallAfterExtraction,
+                    installPath,
                   },
                   signal
                 );

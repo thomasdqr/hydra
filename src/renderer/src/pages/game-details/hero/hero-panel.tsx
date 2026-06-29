@@ -19,11 +19,14 @@ export function HeroPanel() {
   const { lastPacket } = useDownload();
 
   const extraction = useAppSelector((state) => state.download.extraction);
+  const installer = useAppSelector((state) => state.download.installer);
 
   const isGameDownloading =
     game?.download?.status === "active" && lastPacket?.gameId === game?.id;
 
   const isExtracting = extraction?.visibleId === game?.id;
+  const isInstalling =
+    installer?.visibleId === game?.id && installer?.status === "running";
 
   const getInfo = () => {
     if (!game) {
@@ -54,6 +57,7 @@ export function HeroPanel() {
     game?.download?.status === "paused";
 
   const showExtractionProgressBar = isExtracting;
+  const showInstallerProgressBar = isInstalling && !isExtracting;
 
   return (
     <div className="hero-panel__container">
@@ -84,6 +88,14 @@ export function HeroPanel() {
             max={1}
             value={extraction?.progress ?? 0}
             className="hero-panel__progress-bar hero-panel__progress-bar--extraction"
+          />
+        )}
+
+        {showInstallerProgressBar && (
+          <progress
+            max={1}
+            value={installer?.progress ?? 0}
+            className="hero-panel__progress-bar hero-panel__progress-bar--installer"
           />
         )}
       </div>

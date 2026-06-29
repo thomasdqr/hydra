@@ -705,6 +705,32 @@ export class DownloadManager {
             );
           });
         });
+    } else if (download.autoInstallAfterExtraction) {
+      // Repack delivered as loose files (e.g. FitGirl: setup.exe + *.bin) where
+      // folderName points at a data file rather than an archive. Nothing to
+      // extract: handle any nested archives in the repack folder (no-op when
+      // none) and, on success, complete extraction which triggers auto-install.
+      // A genuine archive that fails to extract still won't install.
+      const repackRoot = path.dirname(extractionPath);
+      await gameFilesManager
+        .extractFilesInDirectory(repackRoot)
+        .then(async (success) => {
+          if (success) {
+            await gameFilesManager.setExtractionComplete();
+          }
+        })
+        .catch((error) => {
+          logger.error(
+            "[DownloadManager] Failed to auto-install repack",
+            error
+          );
+          return gameFilesManager.failExtraction(error).catch((failError) => {
+            logger.error(
+              "[DownloadManager] Failed to persist extraction failure state",
+              failError
+            );
+          });
+        });
     } else {
       await gameFilesManager
         .failExtraction(

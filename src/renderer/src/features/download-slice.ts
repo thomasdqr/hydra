@@ -7,11 +7,18 @@ export interface ExtractionInfo {
   progress: number;
 }
 
+export interface InstallerInfo {
+  visibleId: string;
+  progress: number;
+  status: "running" | "complete" | "failed";
+}
+
 export interface DownloadState {
   lastPacket: DownloadProgress | null;
   gameId: string | null;
   gamesWithDeletionInProgress: string[];
   extraction: ExtractionInfo | null;
+  installer: InstallerInfo | null;
   peakSpeeds: Record<string, number>;
   speedHistory: Record<string, number[]>;
 }
@@ -21,6 +28,7 @@ const initialState: DownloadState = {
   gameId: null,
   gamesWithDeletionInProgress: [],
   extraction: null,
+  installer: null,
   peakSpeeds: {},
   speedHistory: {},
 };
@@ -97,6 +105,25 @@ export const downloadSlice = createSlice({
     clearExtraction: (state) => {
       state.extraction = null;
     },
+    setInstallerProgress: (
+      state,
+      action: PayloadAction<{
+        shop: GameShop;
+        objectId: string;
+        progress: number;
+        status: "running" | "complete" | "failed";
+      }>
+    ) => {
+      const { shop, objectId, progress, status } = action.payload;
+      state.installer = {
+        visibleId: `${shop}:${objectId}`,
+        progress,
+        status,
+      };
+    },
+    clearInstaller: (state) => {
+      state.installer = null;
+    },
     updatePeakSpeed: (
       state,
       action: PayloadAction<{ gameId: string; speed: number }>
@@ -121,6 +148,8 @@ export const {
   removeGameFromDeleting,
   setExtractionProgress,
   clearExtraction,
+  setInstallerProgress,
+  clearInstaller,
   updatePeakSpeed,
   clearPeakSpeed,
 } = downloadSlice.actions;

@@ -674,6 +674,8 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.invoke("removeGame", shop, objectId),
   deleteGameFolder: (shop: GameShop, objectId: string) =>
     ipcRenderer.invoke("deleteGameFolder", shop, objectId),
+  uninstallGame: (shop: GameShop, objectId: string) =>
+    ipcRenderer.invoke("uninstallGame", shop, objectId),
   getGameByObjectId: (shop: GameShop, objectId: string) =>
     ipcRenderer.invoke("getGameByObjectId", shop, objectId),
   resetGameAchievements: (shop: GameShop, objectId: string) =>
@@ -769,6 +771,24 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("on-archive-deletion-prompt", listener);
     return () =>
       ipcRenderer.removeListener("on-archive-deletion-prompt", listener);
+  },
+  onInstallerProgress: (
+    cb: (
+      shop: GameShop,
+      objectId: string,
+      progress: number,
+      status: "running" | "complete" | "failed"
+    ) => void
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      shop: GameShop,
+      objectId: string,
+      progress: number,
+      status: "running" | "complete" | "failed"
+    ) => cb(shop, objectId, progress, status);
+    ipcRenderer.on("on-installer-progress", listener);
+    return () => ipcRenderer.removeListener("on-installer-progress", listener);
   },
   deleteArchive: (filePath: string) =>
     ipcRenderer.invoke("deleteArchive", filePath),

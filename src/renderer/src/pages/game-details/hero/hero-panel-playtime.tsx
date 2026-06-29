@@ -23,8 +23,11 @@ export function HeroPanelPlaytime() {
   const { progress, lastPacket } = useDownload();
   const { formatDistance } = useDate();
   const extraction = useAppSelector((state) => state.download.extraction);
+  const installer = useAppSelector((state) => state.download.installer);
 
   const isExtracting = extraction?.visibleId === game?.id;
+  const isInstalling =
+    installer?.visibleId === game?.id && installer?.status === "running";
 
   useEffect(() => {
     if (game?.lastTimePlayed) {
@@ -70,6 +73,16 @@ export function HeroPanelPlaytime() {
     </div>
   );
 
+  const installerInProgressInfo = (
+    <div className="hero-panel-playtime__download-details">
+      <Link to="/downloads" className="hero-panel-playtime__downloads-link">
+        {t("installing")}
+      </Link>
+
+      <small>{formatDownloadProgress(installer?.progress ?? 0)}</small>
+    </div>
+  );
+
   const downloadInProgressInfo = (
     <div className="hero-panel-playtime__download-details">
       <Link to="/downloads" className="hero-panel-playtime__downloads-link">
@@ -91,7 +104,11 @@ export function HeroPanelPlaytime() {
       <>
         <p>{t("not_played_yet", { title: game?.title })}</p>
         {isExtracting && extractionInProgressInfo}
-        {!isExtracting && hasDownload && downloadInProgressInfo}
+        {isInstalling && !isExtracting && installerInProgressInfo}
+        {!isExtracting &&
+          !isInstalling &&
+          hasDownload &&
+          downloadInProgressInfo}
       </>
     );
   }
@@ -101,7 +118,11 @@ export function HeroPanelPlaytime() {
       <>
         <p>{t("playing_now")}</p>
         {isExtracting && extractionInProgressInfo}
-        {!isExtracting && hasDownload && downloadInProgressInfo}
+        {isInstalling && !isExtracting && installerInProgressInfo}
+        {!isExtracting &&
+          !isInstalling &&
+          hasDownload &&
+          downloadInProgressInfo}
       </>
     );
   }
@@ -134,8 +155,9 @@ export function HeroPanelPlaytime() {
       </p>
 
       {isExtracting && extractionInProgressInfo}
-      {!isExtracting && hasDownload && downloadInProgressInfo}
-      {!isExtracting && !hasDownload && (
+      {isInstalling && !isExtracting && installerInProgressInfo}
+      {!isExtracting && !isInstalling && hasDownload && downloadInProgressInfo}
+      {!isExtracting && !isInstalling && !hasDownload && (
         <p>
           {t("last_time_played", {
             period: lastTimePlayed,

@@ -309,6 +309,10 @@ declare global {
     removeGameFromLibrary: (shop: GameShop, objectId: string) => Promise<void>;
     removeGame: (shop: GameShop, objectId: string) => Promise<void>;
     deleteGameFolder: (shop: GameShop, objectId: string) => Promise<unknown>;
+    uninstallGame: (
+      shop: GameShop,
+      objectId: string
+    ) => Promise<{ ok: boolean; error?: string }>;
     getGameByObjectId: (
       shop: GameShop,
       objectId: string
@@ -580,6 +584,14 @@ declare global {
     ) => () => Electron.IpcRenderer;
     onArchiveDeletionPrompt: (
       cb: (archivePaths: string[]) => void
+    ) => () => Electron.IpcRenderer;
+    onInstallerProgress: (
+      cb: (
+        shop: GameShop,
+        objectId: string,
+        progress: number,
+        status: "running" | "complete" | "failed"
+      ) => void
     ) => () => Electron.IpcRenderer;
     deleteArchive: (filePath: string) => Promise<boolean>;
     getDefaultWinePrefixSelectionPath: () => Promise<string | null>;

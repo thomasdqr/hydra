@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { Modal } from "@renderer/components";
+import { Button, Modal } from "@renderer/components";
 import { formatBytes, GAMEMODE_SITE_URL, MANGOHUD_SITE_URL } from "@shared";
 
 import type {
@@ -18,7 +18,6 @@ import type {
   ShortcutLocation,
 } from "@types";
 import { gameDetailsContext } from "@renderer/context";
-import { DeleteGameModal } from "@renderer/pages/downloads/delete-game-modal";
 import {
   useAppSelector,
   useDownload,
@@ -92,7 +91,7 @@ export function GameOptionsModal({
   const [transferETA, setTransferETA] = useState(0);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showUninstallModal, setShowUninstallModal] = useState(false);
   const [showRemoveGameModal, setShowRemoveGameModal] = useState(false);
   const [gameTitle, setGameTitle] = useState(game.title ?? "");
   const [updatingGameTitle, setUpdatingGameTitle] = useState(false);
@@ -128,12 +127,8 @@ export function GameOptionsModal({
   const [showSteamShortcutModal, setShowSteamShortcutModal] = useState(false);
   const [steamShortcutExists, setSteamShortcutExists] = useState(false);
 
-  const {
-    removeGameInstaller,
-    removeGameFromLibrary,
-    isGameDeleting,
-    cancelDownload,
-  } = useDownload();
+  const { removeGameFromLibrary, isGameDeleting, cancelDownload } =
+    useDownload();
   const { userDetails, hasActiveSubscription } = useUserDetails();
   const { showHydraCloudModal } = useSubscription();
   const userPreferences = useAppSelector(
@@ -474,9 +469,39 @@ export function GameOptionsModal({
 
   const handleOpenDownloadFolder = () =>
     globalThis.window.electron.openGameInstallerPath(game.shop, game.objectId);
-  const handleDeleteGame = async () => {
-    await removeGameInstaller(game.shop, game.objectId);
-    updateGame();
+  const handleUninstallGame = async () => {
+    setShowUninstallModal(false);
+
+    try {
+      const result = await window.electron.uninstallGame(
+        game.shop,
+        game.objectId
+      );
+
+      if (result.ok) {
+        showSuccessToast(t("uninstall_success"));
+        await Promise.all([updateGame(), updateLibrary()]);
+        onClose();
+        return;
+      }
+
+      // A declined UAC prompt leaves everything untouched; stay silent.
+      if (result.error === "cancelled") return;
+
+      if (result.error === "uninstaller_shared_folder") {
+        showErrorToast(t("uninstall_shared_folder"));
+        return;
+      }
+
+      showErrorToast(
+        result.error === "uninstaller_not_found"
+          ? t("uninstall_no_uninstaller")
+          : t("uninstall_failed")
+      );
+    } catch (error) {
+      showErrorToast(t("uninstall_failed"));
+      logger.error("Failed to uninstall game", error);
+    }
   };
   const handleOpenGameExecutablePath = () =>
     globalThis.window.electron.openGameExecutablePath(game.shop, game.objectId);
@@ -907,11 +932,21 @@ export function GameOptionsModal({
 
   return (
     <>
-      <DeleteGameModal
-        visible={showDeleteModal}
-        onClose={() => setShowDeleteModal(false)}
-        deleteGame={handleDeleteGame}
-      />
+      <Modal
+        visible={showUninstallModal}
+        title={t("uninstall")}
+        description={t("uninstall_description", { game: game.title })}
+        onClose={() => setShowUninstallModal(false)}
+      >
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Button onClick={() => setShowUninstallModal(false)} theme="outline">
+            {t("cancel")}
+          </Button>
+          <Button onClick={handleUninstallGame} theme="danger">
+            {t("uninstall")}
+          </Button>
+        </div>
+      </Modal>
       <RemoveGameFromLibraryModal
         visible={showRemoveGameModal}
         onClose={() => setShowRemoveGameModal(false)}
@@ -1030,7 +1065,7 @@ export function GameOptionsModal({
                   setShowResetAchievementsModal(true)
                 }
                 onOpenChangePlaytime={() => setShowChangePlaytimeModal(true)}
-                onOpenRemoveFiles={() => setShowDeleteModal(true)}
+                onOpenUninstall={() => setShowUninstallModal(true)}
               />
             )}
           </div>
